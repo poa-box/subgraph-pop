@@ -3,3 +3,6 @@ tests/
 # But allow per-subgraph tests
 !pop-subgraph/tests/
 !peer-cashoutrelay-base/tests/
+
+# yarn is the package manager. Keep it that way.
+package-lock.json

@@ -4,13 +4,16 @@ Graph Protocol subgraph for the Perpetual Organization Protocol (POP) — worker
 
 ## Commands
 
-All commands run from `pop-subgraph/`:
+This repo uses **yarn** (1.x classic). The CI's `actions/setup-node` cache key is `yarn.lock`, and `package-lock.json` is gitignored — do NOT run `npm install`. If you don't have yarn: `npm i -g yarn`.
+
+All commands run from the relevant subgraph directory (`pop-subgraph/` or `peer-cashoutrelay-base/`):
 
 ```bash
-npm run codegen    # Generate types from schema.graphql + ABIs. Re-run after ANY schema/ABI/subgraph.yaml change.
-npm run build      # Compile AssemblyScript to WASM
-npm run test       # Matchstick v0.6.0 unit tests
-subgraph-lint      # Shell function (not an npm package) — must run from pop-subgraph/
+yarn install       # Install deps. Run once after cloning or after dep changes.
+yarn codegen       # Generate types from schema.graphql + ABIs. Re-run after ANY schema/ABI/subgraph.yaml change.
+yarn build         # Compile AssemblyScript to WASM
+yarn test          # Matchstick v0.6.0 unit tests
+subgraph-lint      # Shell function (not a yarn package) — must run from the subgraph directory
 ```
 
 ## Before Creating a PR
@@ -18,10 +21,10 @@ subgraph-lint      # Shell function (not an npm package) — must run from pop-s
 Run in order (each depends on the previous):
 
 ```bash
-cd pop-subgraph
-npm run codegen
-npm run build
-npm run test
+cd <subgraph-dir>   # pop-subgraph/ or peer-cashoutrelay-base/
+yarn codegen
+yarn build
+yarn test
 subgraph-lint
 ```
 
@@ -123,7 +126,7 @@ Test setup: `setupXxxEntities()` creates prerequisite entities (Organization, co
 ## Adding a New Event Handler
 
 1. Add event signature to `subgraph.yaml` — under the correct **template** (not dataSources) unless it's a new hardcoded source
-2. Run `npm run codegen` to generate the event type
+2. Run `yarn codegen` to generate the event type
 3. Create handler in the appropriate `src/*.ts` file
 4. Load contract entity by `event.address` to get orgId — **always null-check**
 5. User linking: join events use `createUserOnJoin()`, activity events use `loadExistingUser()`
@@ -197,9 +200,9 @@ Update all 4 entries for the target network:
 
 ```bash
 cd pop-subgraph
-npm run codegen
-npm run build
-npm run test
+yarn codegen
+yarn build
+yarn test
 subgraph-lint
 ```
 

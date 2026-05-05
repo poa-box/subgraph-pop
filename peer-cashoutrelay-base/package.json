@@ -1,6 +1,7 @@
 {
   "name": "peer-cashoutrelay-base",
   "license": "UNLICENSED",
+  "packageManager": "yarn@1.22.22",
   "scripts": {
     "codegen": "graph codegen",
     "build": "graph build",

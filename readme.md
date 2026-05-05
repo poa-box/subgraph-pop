@@ -84,20 +84,20 @@ The full schema is in [`pop-subgraph/schema.graphql`](pop-subgraph/schema.graphq
 
 ## Local development
 
-All commands run from `pop-subgraph/`.
+All commands run from a subgraph directory (`pop-subgraph/` or `peer-cashoutrelay-base/`).
 
 ### Prerequisites
 
-- Node 18+ and `npm`
+- Node 18+ and **yarn** (1.x classic). If you don't have yarn: `npm i -g yarn`. This repo is yarn-only — `package-lock.json` is gitignored and CI keys its cache off `yarn.lock`.
 - The Graph CLI is installed as a project dependency — no global install needed.
-- Docker (only if you want to run a local Graph node)
+- Docker (only if you want to run a local Graph node).
 
 ### Setup
 
 ```bash
 git clone https://github.com/poa-box/subgraph-pop.git
-cd subgraph-pop/pop-subgraph
-npm install
+cd subgraph-pop/pop-subgraph    # or peer-cashoutrelay-base
+yarn install
 ```
 
 ### The four-command loop
@@ -105,10 +105,10 @@ npm install
 Run these in order — each step depends on the previous one. The CI runs the same sequence.
 
 ```bash
-npm run codegen   # regenerate AssemblyScript types from schema.graphql + ABIs
-npm run build     # compile to WASM
-npm run test      # Matchstick unit tests
-subgraph-lint     # repo-wide lint checks (shell function from the Poa toolchain, run inside pop-subgraph/)
+yarn codegen   # regenerate AssemblyScript types from schema.graphql + ABIs
+yarn build     # compile to WASM
+yarn test      # Matchstick unit tests
+subgraph-lint  # repo-wide lint checks (shell function from the Poa toolchain, run inside the subgraph dir)
 ```
 
 If any of these fail on `main`, that's a release blocker; fix it before opening a PR. CI reproduces this sequence on every PR.
@@ -120,8 +120,8 @@ If any of these fail on `main`, that's a release blocker; fix it before opening 
 ```bash
 cd pop-subgraph
 docker compose up -d
-npm run create-local
-npm run deploy-local
+yarn create-local
+yarn deploy-local
 ```
 
 Query the local subgraph at `http://localhost:8000/subgraphs/name/poa-arb-v-1`.
@@ -146,7 +146,7 @@ Poa is built by its members. The fastest path in is a working diff.
 ### Workflow
 
 1. Fork or branch off `main`.
-2. Make the change. From `pop-subgraph/`, run `npm run codegen && npm run build && npm run test && subgraph-lint` — all four must pass.
+2. Make the change. From the subgraph dir you touched, run `yarn codegen && yarn build && yarn test && subgraph-lint` — all four must pass.
 3. Open a PR against `main`. CI will redeploy to Studio if it merges.
 4. For protocol-level discussion, ABI changes, or larger refactors, open a thread in [Discord](https://discord.gg/9SD6u4QjTt) first — it's faster.
 5. Once you're a Poa member, you'll vote on the org's roadmap and earn Participation Tokens for merged work. [Apply on-chain](https://www.poa.box/home/?org=Poa).
