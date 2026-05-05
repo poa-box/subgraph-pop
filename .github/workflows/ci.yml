@@ -3,10 +3,14 @@ name: Subgraph CI/CD
 on:
   pull_request:
     branches: [main]
-    paths: ['pop-subgraph/**']
+    paths:
+      - 'pop-subgraph/**'
+      - 'peer-cashoutrelay-base/**'
   push:
     branches: [main]
-    paths: ['pop-subgraph/**']
+    paths:
+      - 'pop-subgraph/**'
+      - 'peer-cashoutrelay-base/**'
 
 jobs:
   subgraph-arbitrum-one:
@@ -25,5 +29,14 @@ jobs:
       working-directory: pop-subgraph
       network: gnosis
       run-tests: false
+    secrets:
+      GRAPH_DEPLOY_KEY: ${{ secrets.GRAPH_DEPLOY_KEY }}
+
+  subgraph-base:
+    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
+    with:
+      subgraph-name: peer-cashoutrelay-base
+      working-directory: peer-cashoutrelay-base
+      network: base
     secrets:
       GRAPH_DEPLOY_KEY: ${{ secrets.GRAPH_DEPLOY_KEY }}

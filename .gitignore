@@ -1,4 +1,5 @@
 # Test artifacts
 tests/
-# But allow pop-subgraph tests
+# But allow per-subgraph tests
 !pop-subgraph/tests/
+!peer-cashoutrelay-base/tests/

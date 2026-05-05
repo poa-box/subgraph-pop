@@ -1,0 +1,91 @@
+[
+  {
+    "type": "event",
+    "name": "CashOutDeposited",
+    "anonymous": false,
+    "inputs": [
+      { "name": "depositor", "type": "address", "indexed": true, "internalType": "address" },
+      { "name": "requestHash", "type": "bytes32", "indexed": true, "internalType": "bytes32" },
+      { "name": "amount", "type": "uint256", "indexed": false, "internalType": "uint256" },
+      { "name": "paymentMethod", "type": "bytes32", "indexed": false, "internalType": "bytes32" }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "CashOutFailed",
+    "anonymous": false,
+    "inputs": [
+      { "name": "depositor", "type": "address", "indexed": true, "internalType": "address" },
+      { "name": "requestHash", "type": "bytes32", "indexed": true, "internalType": "bytes32" },
+      { "name": "amount", "type": "uint256", "indexed": false, "internalType": "uint256" },
+      { "name": "reason", "type": "bytes", "indexed": false, "internalType": "bytes" }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "TokensRecovered",
+    "anonymous": false,
+    "inputs": [
+      { "name": "to", "type": "address", "indexed": true, "internalType": "address" },
+      { "name": "token", "type": "address", "indexed": true, "internalType": "address" },
+      { "name": "amount", "type": "uint256", "indexed": false, "internalType": "uint256" }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "Upgraded",
+    "anonymous": false,
+    "inputs": [
+      { "name": "implementation", "type": "address", "indexed": true, "internalType": "address" }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "usdc",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }]
+  },
+  {
+    "type": "function",
+    "name": "escrow",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }]
+  },
+  {
+    "type": "function",
+    "name": "cctpMessageTransmitter",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }]
+  },
+  {
+    "type": "function",
+    "name": "owner",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }]
+  },
+  {
+    "type": "function",
+    "name": "failedDepositor",
+    "stateMutability": "view",
+    "inputs": [{ "name": "", "type": "bytes32", "internalType": "bytes32" }],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }]
+  },
+  {
+    "type": "function",
+    "name": "failedAmount",
+    "stateMutability": "view",
+    "inputs": [{ "name": "", "type": "bytes32", "internalType": "bytes32" }],
+    "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }]
+  },
+  {
+    "type": "function",
+    "name": "totalFailedAmount",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }]
+  }
+]
