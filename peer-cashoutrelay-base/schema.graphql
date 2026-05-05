@@ -1,0 +1,108 @@
+# DEPOSITED = ZKP2P deposit successfully created on EscrowV2; the user is now
+#             waiting for a Venmo taker. The Venmo-fill lifecycle lives on
+#             EscrowV2, NOT this subgraph — DEPOSITED is not "money received".
+# FAILED    = ZKP2P call reverted; USDC is held in the relay for user recovery
+#             via recoverFailed(requestHash). This is the "pending" state the
+#             frontend cares about (see Wallet.pendingCashouts).
+# RECOVERED = User pulled their USDC back via recoverFailed. Terminal.
+enum CashOutStatus {
+  DEPOSITED
+  FAILED
+  RECOVERED
+}
+
+type Wallet @entity(immutable: false) {
+  id: Bytes!
+  address: Bytes!
+  cashoutRequests: [CashOutRequest!]! @derivedFrom(field: "depositor")
+  pendingCashouts: [CashOutRequest!]! @derivedFrom(field: "pendingFor")
+  totalDepositedAmount: BigInt!
+  totalFailedAmount: BigInt!
+  totalRecoveredAmount: BigInt!
+  pendingCount: BigInt!
+  firstSeenAt: BigInt!
+  lastActivityAt: BigInt!
+}
+
+type CashOutRequest @entity(immutable: false) {
+  id: Bytes!
+  requestHash: Bytes!
+  depositor: Wallet!
+  pendingFor: Wallet
+  amount: BigInt!
+  paymentMethod: Bytes
+  status: CashOutStatus!
+  failureReason: Bytes
+  createdAtBlock: BigInt!
+  createdAtTimestamp: BigInt!
+  createdTxHash: Bytes!
+  resolvedAtBlock: BigInt
+  resolvedAtTimestamp: BigInt
+  resolvedTxHash: Bytes
+}
+
+type CashOutDepositedEvent @entity(immutable: true) {
+  id: Bytes!
+  request: CashOutRequest!
+  depositor: Wallet!
+  amount: BigInt!
+  paymentMethod: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CashOutFailedEvent @entity(immutable: true) {
+  id: Bytes!
+  request: CashOutRequest!
+  depositor: Wallet!
+  amount: BigInt!
+  reason: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TokensRecoveredEvent @entity(immutable: true) {
+  id: Bytes!
+  to: Bytes!
+  token: Bytes!
+  amount: BigInt!
+  resolvedRequest: CashOutRequest
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type UpgradedEvent @entity(immutable: true) {
+  id: Bytes!
+  implementation: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type RelayContract @entity(immutable: false) {
+  id: Bytes!
+  usdc: Bytes
+  escrow: Bytes
+  cctpMessageTransmitter: Bytes
+  owner: Bytes
+  currentImplementation: Bytes
+  totalRequests: BigInt!
+  totalFailedRequests: BigInt!
+  totalPendingRequests: BigInt!
+  totalRecoveredRequests: BigInt!
+  totalDepositedAmount: BigInt!
+  totalFailedAmount: BigInt!
+  totalRecoveredAmount: BigInt!
+  lastUpgradeAt: BigInt
+}
+
+# Internal index used to resolve TokensRecovered (token, to, amount) -> requestHash.
+# Keyed by walletHex + "-" + amount.toString(). pendingRequests is FIFO; on each
+# FAILED we append, on each matching USDC TokensRecovered we pop the head.
+type WalletPendingByAmount @entity(immutable: false) {
+  id: String!
+  pendingRequests: [Bytes!]!
+}

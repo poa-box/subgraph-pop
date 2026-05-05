@@ -1,0 +1,39 @@
+specVersion: 1.2.0
+indexerHints:
+  prune: never
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: CashOutRelay
+    network: base
+    source:
+      abi: CashOutRelay
+      address: "0xA65414A21dc114199cAfD7c6c3ed99488Eb9eFE5"
+      startBlock: 44464307
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Wallet
+        - CashOutRequest
+        - CashOutDepositedEvent
+        - CashOutFailedEvent
+        - TokensRecoveredEvent
+        - UpgradedEvent
+        - RelayContract
+        - WalletPendingByAmount
+      abis:
+        - name: CashOutRelay
+          file: ./abis/CashOutRelay.json
+      eventHandlers:
+        - event: CashOutDeposited(indexed address,indexed bytes32,uint256,bytes32)
+          handler: handleCashOutDeposited
+        - event: CashOutFailed(indexed address,indexed bytes32,uint256,bytes)
+          handler: handleCashOutFailed
+        - event: TokensRecovered(indexed address,indexed address,uint256)
+          handler: handleTokensRecovered
+        - event: Upgraded(indexed address)
+          handler: handleUpgraded
+      file: ./src/cash-out-relay.ts

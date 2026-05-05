@@ -1,0 +1,23 @@
+{
+  "name": "peer-cashoutrelay-base",
+  "license": "UNLICENSED",
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "build:base": "graph build --network base",
+    "deploy:base": "graph deploy --network base --node https://api.studio.thegraph.com/deploy/ peer-cashoutrelay-base",
+    "create-local": "graph create --node http://localhost:8020/ peer-cashoutrelay-base",
+    "remove-local": "graph remove --node http://localhost:8020/ peer-cashoutrelay-base",
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 peer-cashoutrelay-base",
+    "test": "graph test --version 0.6.0"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-cli": "^0.98.1",
+    "@graphprotocol/graph-ts": "0.37.0",
+    "source-map-support": "^0.5.21"
+  },
+  "devDependencies": {
+    "matchstick-as": "0.6.0"
+  }
+}

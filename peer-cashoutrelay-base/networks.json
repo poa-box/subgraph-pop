@@ -1,0 +1,8 @@
+{
+  "base": {
+    "CashOutRelay": {
+      "address": "0xA65414A21dc114199cAfD7c6c3ed99488Eb9eFE5",
+      "startBlock": 44464307
+    }
+  }
+}
