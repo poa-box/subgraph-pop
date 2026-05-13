@@ -337,6 +337,10 @@ templates:
         - ProjectBountyCap
         - ProjectCapChange
         - BountyCapChange
+        - FolderRootChange
+        - GlobalRolePermission
+        - Organization
+        - TaskManager
       abis:
         - name: TaskManager
           file: ./abis/TaskManager.json
@@ -353,6 +357,12 @@ templates:
           handler: handleProjectRolePermSet
         - event: BountyCapSet(indexed bytes32,indexed address,uint256,uint256)
           handler: handleBountyCapSet
+        - event: FoldersUpdated(indexed bytes32,indexed bytes32,indexed address)
+          handler: handleFoldersUpdated
+        - event: OrganizerHatAllowed(indexed uint256,bool)
+          handler: handleOrganizerHatAllowed
+        - event: RolePermSet(indexed uint256,uint8)
+          handler: handleRolePermSet
         - event: TaskCreated(indexed uint256,indexed
             bytes32,uint256,address,uint256,bool,bytes,bytes32)
           handler: handleTaskCreated

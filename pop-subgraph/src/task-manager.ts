@@ -16,18 +16,24 @@ import {
   TaskUpdated,
   TaskApplicationSubmitted,
   TaskApplicationApproved,
-  TaskRejected
+  TaskRejected,
+  FoldersUpdated,
+  OrganizerHatAllowed,
+  RolePermSet
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
   Task,
   TaskApplication,
   TaskManager,
+  Organization,
   ProjectManager,
   ProjectRolePermission,
+  GlobalRolePermission,
   ProjectBountyCap,
   ProjectCapChange,
   BountyCapChange,
+  FolderRootChange,
   TaskMetadata,
   TaskApplicationMetadata,
   ProjectMetadata,
@@ -720,4 +726,117 @@ export function handleTaskRejected(event: TaskRejected): void {
   }
 
   rejection.save();
+}
+
+/**
+ * Handles the FoldersUpdated event from a TaskManager contract (v4).
+ * Stores the new IPFS root on the Organization and appends a FolderRootChange
+ * record so frontends can render a revision log. The subgraph does not resolve
+ * the folder-tree JSON itself — the frontend fetches IPFS at the root.
+ */
+export function handleFoldersUpdated(event: FoldersUpdated): void {
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) return;
+
+  let organization = Organization.load(taskManager.organization);
+  if (!organization) return;
+
+  organization.foldersRoot = event.params.newRoot;
+  organization.foldersUpdatedAt = event.block.timestamp;
+  organization.foldersUpdatedBy = event.params.sender;
+  organization.save();
+
+  let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let change = new FolderRootChange(changeId);
+  change.organization = organization.id;
+  change.newRoot = event.params.newRoot;
+  change.oldRoot = event.params.oldRoot;
+  change.sender = event.params.sender;
+  change.senderUsername = getUsernameForAddress(event.params.sender);
+
+  let user = loadExistingUser(
+    organization.id,
+    event.params.sender,
+    event.block.timestamp,
+    event.block.number
+  );
+  if (user) {
+    change.senderUser = user.id;
+  }
+
+  change.changedAt = event.block.timestamp;
+  change.changedAtBlock = event.block.number;
+  change.transactionHash = event.transaction.hash;
+  change.save();
+}
+
+/**
+ * Handles the OrganizerHatAllowed event from a TaskManager contract (v4).
+ * Mutates the denormalized organizerHatIds array on the TaskManager entity.
+ * Mirrors the contract's HatManager.setHatInArray semantics: add if allowed
+ * and not already present; remove if revoked and present. No-op otherwise.
+ */
+export function handleOrganizerHatAllowed(event: OrganizerHatAllowed): void {
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) return;
+
+  let hatId = event.params.hatId;
+  let allowed = event.params.allowed;
+
+  // Copy-mutate-reassign — AssemblyScript array fields don't mutate in place.
+  let current = taskManager.organizerHatIds;
+  let next: BigInt[] = [];
+  let found = false;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].equals(hatId)) {
+      found = true;
+      if (allowed) {
+        next.push(current[i]); // keep
+      }
+      // if !allowed, drop
+    } else {
+      next.push(current[i]);
+    }
+  }
+  if (allowed && !found) {
+    next.push(hatId);
+  }
+
+  taskManager.organizerHatIds = next;
+  taskManager.save();
+}
+
+/**
+ * Handles the RolePermSet event from a TaskManager contract (v4).
+ * Upserts a GlobalRolePermission entity keyed by (taskManager, hatId).
+ * Writes the mask verbatim — mask=0 (revoke) is intentionally preserved so
+ * frontends can distinguish "never granted" (no entity) from "explicitly revoked"
+ * (entity with mask=0). Decodes all 6 TaskPerm bits for query convenience.
+ */
+export function handleRolePermSet(event: RolePermSet): void {
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) return;
+
+  let hatId = event.params.hatId;
+  let mask = event.params.mask;
+
+  let id = event.address.toHexString() + "-" + hatId.toString();
+  let perm = GlobalRolePermission.load(id);
+  if (perm == null) {
+    perm = new GlobalRolePermission(id);
+    perm.taskManager = event.address;
+    perm.hatId = hatId;
+  }
+
+  perm.mask = mask;
+  perm.canCreate = (mask & 1) != 0;
+  perm.canClaim = (mask & 2) != 0;
+  perm.canReview = (mask & 4) != 0;
+  perm.canAssign = (mask & 8) != 0;
+  perm.canSelfReview = (mask & 16) != 0;
+  perm.canBudget = (mask & 32) != 0;
+  perm.setAt = event.block.timestamp;
+  perm.setAtBlock = event.block.number;
+  perm.transactionHash = event.transaction.hash;
+  perm.save();
 }

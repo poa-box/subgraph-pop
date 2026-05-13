@@ -32,6 +32,13 @@ type Organization @entity(immutable: false) {
   metadataAdminHatId: BigInt
   registeredContracts: [RegisteredContract!]! @derivedFrom(field: "organization")
   roles: [Role!]! @derivedFrom(field: "organization")
+  # Project folders (TaskManager v4) — IPFS root for the org's folder tree.
+  # bytes32 sha256 digest; frontend prepends 0x1220 and base58-encodes to a CIDv0.
+  # Null until the first setFolders() call.
+  foldersRoot: Bytes
+  foldersUpdatedAt: BigInt
+  foldersUpdatedBy: Bytes # _msgSender() from FoldersUpdated (smart-wallet-aware)
+  folderRootChanges: [FolderRootChange!]! @derivedFrom(field: "organization")
 }
 
 # ========================================
@@ -98,6 +105,10 @@ type TaskManager @entity(immutable: false) {
   organization: Organization! # Organization this TaskManager belongs to
   projects: [Project!]! @derivedFrom(field: "taskManager")
   creatorHatIds: [BigInt!]! # Hat IDs that can create projects (derived from org config)
+  # Hat IDs authorized to call setFolders (TaskManager v4).
+  # Managed via setConfig(ORGANIZER_HAT_ALLOWED, ...) which emits OrganizerHatAllowed.
+  organizerHatIds: [BigInt!]!
+  globalRolePermissions: [GlobalRolePermission!]! @derivedFrom(field: "taskManager")
   createdAt: BigInt!
   createdAtBlock: BigInt!
   transactionHash: Bytes!
@@ -217,6 +228,49 @@ type BountyCapChange @entity(immutable: true) {
   newCap: BigInt!
   changedAt: BigInt!
   changedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+# ========================================
+# TaskManager v4 — Folders + Global Role Permissions
+# ========================================
+
+"""
+Immutable record of a folders-root revision emitted by TaskManager.setFolders().
+Use these to render a revision log; current root is on Organization.foldersRoot.
+"""
+type FolderRootChange @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  organization: Organization!
+  newRoot: Bytes! # bytes32 sha256 digest of the new IPFS root
+  oldRoot: Bytes! # previous root (zero bytes if first emission)
+  sender: Bytes! # _msgSender() from event — smart-wallet-aware "who edited"
+  senderUser: User # nullable — populated only if sender is a known org member
+  senderUsername: String
+  changedAt: BigInt!
+  changedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Global TaskPerm grants set via setConfig(ROLE_PERM, ...) on TaskManager.
+Distinct from per-project grants (see ProjectRolePermission); a hat may hold
+TaskPerm.BUDGET (or any other bit) globally without per-project entries.
+mask=0 means the hat was revoked.
+"""
+type GlobalRolePermission @entity(immutable: false) {
+  id: String! # taskManager-hatId (composite key for cross-org isolation)
+  taskManager: TaskManager!
+  hatId: BigInt!
+  mask: Int! # uint8 (CREATE=1, CLAIM=2, REVIEW=4, ASSIGN=8, SELF_REVIEW=16, BUDGET=32)
+  canCreate: Boolean! # mask & 1
+  canClaim: Boolean! # mask & 2
+  canReview: Boolean! # mask & 4
+  canAssign: Boolean! # mask & 8
+  canSelfReview: Boolean! # mask & 16
+  canBudget: Boolean! # mask & 32 — TaskPerm.BUDGET (resize project caps)
+  setAt: BigInt!
+  setAtBlock: BigInt!
   transactionHash: Bytes!
 }
 

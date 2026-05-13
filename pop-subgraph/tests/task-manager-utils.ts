@@ -11,7 +11,10 @@ import {
   TaskAssigned,
   TaskSubmitted,
   TaskCompleted,
-  TaskRejected
+  TaskRejected,
+  FoldersUpdated,
+  OrganizerHatAllowed,
+  RolePermSet
 } from "../generated/templates/TaskManager/TaskManager";
 
 export function createProjectCreatedEvent(
@@ -239,6 +242,61 @@ export function createBountyCapSetEvent(
   );
   event.parameters.push(
     new ethereum.EventParam("newCap", ethereum.Value.fromUnsignedBigInt(newCap))
+  );
+
+  return event;
+}
+
+export function createFoldersUpdatedEvent(
+  newRoot: Bytes,
+  oldRoot: Bytes,
+  sender: Address
+): FoldersUpdated {
+  let event = changetype<FoldersUpdated>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("newRoot", ethereum.Value.fromFixedBytes(newRoot))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("oldRoot", ethereum.Value.fromFixedBytes(oldRoot))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("sender", ethereum.Value.fromAddress(sender))
+  );
+
+  return event;
+}
+
+export function createOrganizerHatAllowedEvent(
+  hatId: BigInt,
+  allowed: boolean
+): OrganizerHatAllowed {
+  let event = changetype<OrganizerHatAllowed>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("allowed", ethereum.Value.fromBoolean(allowed))
+  );
+
+  return event;
+}
+
+export function createRolePermSetEvent(
+  hatId: BigInt,
+  mask: i32
+): RolePermSet {
+  let event = changetype<RolePermSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("mask", ethereum.Value.fromI32(mask))
   );
 
   return event;

@@ -17,7 +17,10 @@ import {
   handleProjectManagerUpdated,
   handleProjectRolePermSet,
   handleBountyCapSet,
-  handleTaskRejected
+  handleTaskRejected,
+  handleFoldersUpdated,
+  handleOrganizerHatAllowed,
+  handleRolePermSet
 } from "../src/task-manager";
 import {
   createProjectCreatedEvent,
@@ -29,7 +32,10 @@ import {
   createProjectManagerUpdatedEvent,
   createProjectRolePermSetEvent,
   createBountyCapSetEvent,
-  createTaskRejectedEvent
+  createTaskRejectedEvent,
+  createFoldersUpdatedEvent,
+  createOrganizerHatAllowedEvent,
+  createRolePermSetEvent
 } from "./task-manager-utils";
 import { Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
@@ -74,6 +80,7 @@ function setupTaskManagerEntities(): void {
   let taskManager = new TaskManager(taskManagerAddress);
   taskManager.organization = orgId;
   taskManager.creatorHatIds = [BigInt.fromI32(1002)]; // Non-member roles that can create projects
+  taskManager.organizerHatIds = []; // populated by OrganizerHatAllowed events (v4)
   taskManager.createdAt = BigInt.fromI32(1000);
   taskManager.createdAtBlock = BigInt.fromI32(100);
   taskManager.transactionHash = Bytes.fromHexString("0xabcd");
@@ -831,6 +838,7 @@ describe("TaskManager", () => {
     let taskManager1 = new TaskManager(taskManager1Address);
     taskManager1.organization = orgId1;
     taskManager1.creatorHatIds = [BigInt.fromI32(1001)];
+    taskManager1.organizerHatIds = [];
     taskManager1.createdAt = BigInt.fromI32(1000);
     taskManager1.createdAtBlock = BigInt.fromI32(100);
     taskManager1.transactionHash = Bytes.fromHexString("0xabcd");
@@ -853,6 +861,7 @@ describe("TaskManager", () => {
     let taskManager2 = new TaskManager(taskManager2Address);
     taskManager2.organization = orgId2;
     taskManager2.creatorHatIds = [BigInt.fromI32(2001)];
+    taskManager2.organizerHatIds = [];
     taskManager2.createdAt = BigInt.fromI32(2000);
     taskManager2.createdAtBlock = BigInt.fromI32(200);
     taskManager2.transactionHash = Bytes.fromHexString("0xdcba");
@@ -918,6 +927,7 @@ describe("TaskManager", () => {
     let taskManager1 = new TaskManager(taskManager1Address);
     taskManager1.organization = orgId1;
     taskManager1.creatorHatIds = [BigInt.fromI32(1001)];
+    taskManager1.organizerHatIds = [];
     taskManager1.createdAt = BigInt.fromI32(1000);
     taskManager1.createdAtBlock = BigInt.fromI32(100);
     taskManager1.transactionHash = Bytes.fromHexString("0xabcd");
@@ -939,6 +949,7 @@ describe("TaskManager", () => {
     let taskManager2 = new TaskManager(taskManager2Address);
     taskManager2.organization = orgId2;
     taskManager2.creatorHatIds = [BigInt.fromI32(2001)];
+    taskManager2.organizerHatIds = [];
     taskManager2.createdAt = BigInt.fromI32(2000);
     taskManager2.createdAtBlock = BigInt.fromI32(200);
     taskManager2.transactionHash = Bytes.fromHexString("0xdcba");
@@ -1001,5 +1012,152 @@ describe("TaskManager", () => {
     let expectedProject2Id = "0xb27182f471e4948107dc771caf2d6c2f28fc3d3b-0x0000000000000000000000000000000000000000000000000000000000000001";
     assert.fieldEquals("Task", expectedTask2Id, "payout", "200");
     assert.fieldEquals("Task", expectedTask2Id, "project", expectedProject2Id);
+  });
+
+  // ========================================
+  // FoldersUpdated Tests (TaskManager v4)
+  // ========================================
+
+  test("FoldersUpdated stores root on Organization and creates FolderRootChange", () => {
+    setupTaskManagerEntities();
+
+    let orgId = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    let newRoot = Bytes.fromHexString("0xaaaa000000000000000000000000000000000000000000000000000000000001");
+    let oldRoot = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
+    let sender = Address.fromString("0x00000000000000000000000000000000000000ff");
+
+    let event = createFoldersUpdatedEvent(newRoot, oldRoot, sender);
+    handleFoldersUpdated(event);
+
+    assert.fieldEquals("Organization", orgId, "foldersRoot", newRoot.toHexString());
+    assert.fieldEquals("Organization", orgId, "foldersUpdatedBy", sender.toHexString());
+    assert.entityCount("FolderRootChange", 1);
+  });
+
+  test("FoldersUpdated chains revisions via oldRoot", () => {
+    setupTaskManagerEntities();
+
+    let root1 = Bytes.fromHexString("0xaaaa000000000000000000000000000000000000000000000000000000000001");
+    let root2 = Bytes.fromHexString("0xbbbb000000000000000000000000000000000000000000000000000000000002");
+    let zero = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
+    let sender = Address.fromString("0x00000000000000000000000000000000000000ff");
+
+    // Distinct logIndex so each FolderRootChange (immutable, ID=txHash-logIndex) is unique.
+    let event1 = createFoldersUpdatedEvent(root1, zero, sender);
+    event1.logIndex = BigInt.fromI32(1);
+    handleFoldersUpdated(event1);
+    let event2 = createFoldersUpdatedEvent(root2, root1, sender);
+    event2.logIndex = BigInt.fromI32(2);
+    handleFoldersUpdated(event2);
+
+    let orgId = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    assert.fieldEquals("Organization", orgId, "foldersRoot", root2.toHexString());
+    assert.entityCount("FolderRootChange", 2);
+  });
+
+  // ========================================
+  // OrganizerHatAllowed Tests (TaskManager v4)
+  // ========================================
+
+  test("OrganizerHatAllowed adds hat to organizerHatIds when allowed=true", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    let hatId = BigInt.fromI32(42);
+
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hatId, true));
+
+    assert.fieldEquals("TaskManager", tmAddr, "organizerHatIds", "[42]");
+  });
+
+  test("OrganizerHatAllowed is idempotent on duplicate add", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    let hatId = BigInt.fromI32(42);
+
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hatId, true));
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hatId, true));
+
+    assert.fieldEquals("TaskManager", tmAddr, "organizerHatIds", "[42]");
+  });
+
+  test("OrganizerHatAllowed removes hat when allowed=false", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    let hat1 = BigInt.fromI32(42);
+    let hat2 = BigInt.fromI32(43);
+
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hat1, true));
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hat2, true));
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hat1, false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "organizerHatIds", "[43]");
+  });
+
+  test("OrganizerHatAllowed remove on absent hat is a no-op", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    let hatId = BigInt.fromI32(42);
+
+    handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hatId, false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "organizerHatIds", "[]");
+  });
+
+  // ========================================
+  // RolePermSet (Global) Tests (TaskManager v4)
+  // ========================================
+
+  test("RolePermSet creates GlobalRolePermission with all 6 bits decoded", () => {
+    setupTaskManagerEntities();
+
+    let hatId = BigInt.fromI32(1001);
+    let mask: i32 = 63; // 0b111111 = all bits
+
+    handleRolePermSet(createRolePermSetEvent(hatId, mask));
+
+    let id = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1001";
+    assert.entityCount("GlobalRolePermission", 1);
+    assert.fieldEquals("GlobalRolePermission", id, "mask", "63");
+    assert.fieldEquals("GlobalRolePermission", id, "canCreate", "true");
+    assert.fieldEquals("GlobalRolePermission", id, "canClaim", "true");
+    assert.fieldEquals("GlobalRolePermission", id, "canReview", "true");
+    assert.fieldEquals("GlobalRolePermission", id, "canAssign", "true");
+    assert.fieldEquals("GlobalRolePermission", id, "canSelfReview", "true");
+    assert.fieldEquals("GlobalRolePermission", id, "canBudget", "true");
+  });
+
+  test("RolePermSet decodes BUDGET-only mask (32)", () => {
+    setupTaskManagerEntities();
+
+    let hatId = BigInt.fromI32(1002);
+    let mask: i32 = 32; // BUDGET only
+
+    handleRolePermSet(createRolePermSetEvent(hatId, mask));
+
+    let id = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1002";
+    assert.fieldEquals("GlobalRolePermission", id, "canCreate", "false");
+    assert.fieldEquals("GlobalRolePermission", id, "canClaim", "false");
+    assert.fieldEquals("GlobalRolePermission", id, "canReview", "false");
+    assert.fieldEquals("GlobalRolePermission", id, "canAssign", "false");
+    assert.fieldEquals("GlobalRolePermission", id, "canSelfReview", "false");
+    assert.fieldEquals("GlobalRolePermission", id, "canBudget", "true");
+  });
+
+  test("RolePermSet revoke (mask=0) is preserved verbatim, not deleted", () => {
+    setupTaskManagerEntities();
+
+    let hatId = BigInt.fromI32(1003);
+
+    handleRolePermSet(createRolePermSetEvent(hatId, 32)); // grant BUDGET
+    handleRolePermSet(createRolePermSetEvent(hatId, 0)); // revoke
+
+    let id = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1003";
+    assert.entityCount("GlobalRolePermission", 1); // not deleted
+    assert.fieldEquals("GlobalRolePermission", id, "mask", "0");
+    assert.fieldEquals("GlobalRolePermission", id, "canBudget", "false");
   });
 });
