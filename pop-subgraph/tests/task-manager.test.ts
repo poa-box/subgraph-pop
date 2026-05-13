@@ -599,6 +599,9 @@ describe("TaskManager", () => {
     assert.fieldEquals("ProjectRolePermission", expectedId, "canClaim", "true");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canReview", "true");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canAssign", "true");
+    // mask=15 has bits 16 and 32 unset
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canSelfReview", "false");
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canBudget", "false");
   });
 
   test("ProjectRolePermSet creates permission with no permissions (mask=0)", () => {
@@ -627,6 +630,55 @@ describe("TaskManager", () => {
     assert.fieldEquals("ProjectRolePermission", expectedId, "canClaim", "false");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canReview", "false");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canAssign", "false");
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canSelfReview", "false");
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canBudget", "false");
+  });
+
+  test("ProjectRolePermSet decodes per-project BUDGET-only mask (32) — v4", () => {
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    handleProjectCreated(createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    ));
+
+    // mask=32 = TaskPerm.BUDGET only — granted per-project (overrides any global mask).
+    handleProjectRolePermSet(createProjectRolePermSetEvent(projectId, BigInt.fromI32(2001), 32));
+
+    let id = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef-2001";
+    assert.fieldEquals("ProjectRolePermission", id, "mask", "32");
+    assert.fieldEquals("ProjectRolePermission", id, "canCreate", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canClaim", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canReview", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canAssign", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canSelfReview", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canBudget", "true");
+  });
+
+  test("ProjectRolePermSet decodes per-project SELF_REVIEW-only mask (16) — v4", () => {
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    handleProjectCreated(createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    ));
+
+    handleProjectRolePermSet(createProjectRolePermSetEvent(projectId, BigInt.fromI32(2002), 16));
+
+    let id = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef-2002";
+    assert.fieldEquals("ProjectRolePermission", id, "canSelfReview", "true");
+    assert.fieldEquals("ProjectRolePermission", id, "canBudget", "false");
+    assert.fieldEquals("ProjectRolePermission", id, "canCreate", "false");
   });
 
   test("ProjectRolePermSet decodes individual permission bits correctly", () => {
@@ -655,6 +707,8 @@ describe("TaskManager", () => {
     assert.fieldEquals("ProjectRolePermission", expectedId, "canClaim", "false");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canReview", "true");
     assert.fieldEquals("ProjectRolePermission", expectedId, "canAssign", "false");
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canSelfReview", "false");
+    assert.fieldEquals("ProjectRolePermission", expectedId, "canBudget", "false");
   });
 
   test("ProjectRolePermSet updates existing permission", () => {

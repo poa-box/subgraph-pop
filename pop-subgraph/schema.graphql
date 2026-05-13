@@ -188,11 +188,13 @@ type ProjectRolePermission @entity(immutable: false) {
   id: String! # taskManager-projectId-hatId (composite key)
   project: Project!
   hatId: BigInt!
-  mask: Int! # Permission bitmask (uint8: create=1, claim=2, review=4, assign=8)
+  mask: Int! # Permission bitmask (uint8: create=1, claim=2, review=4, assign=8, selfReview=16, budget=32)
   canCreate: Boolean! # mask & 1
   canClaim: Boolean! # mask & 2
   canReview: Boolean! # mask & 4
   canAssign: Boolean! # mask & 8
+  canSelfReview: Boolean! # mask & 16 — TaskPerm.SELF_REVIEW (review own submissions)
+  canBudget: Boolean! # mask & 32 — TaskPerm.BUDGET (per-project override of global BUDGET grant)
   setAt: BigInt!
   setAtBlock: BigInt!
   transactionHash: Bytes!

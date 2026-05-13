@@ -580,7 +580,10 @@ export function handleProjectManagerUpdated(event: ProjectManagerUpdated): void 
 /**
  * Handles the ProjectRolePermSet event from a TaskManager contract.
  * Creates or updates a ProjectRolePermission entity to track hat-based permissions.
- * Permission bitmask: CREATE=1, CLAIM=2, REVIEW=4, ASSIGN=8
+ * Permission bitmask: CREATE=1, CLAIM=2, REVIEW=4, ASSIGN=8, SELF_REVIEW=16, BUDGET=32.
+ * SELF_REVIEW and BUDGET were added in TaskManager v4 — the contract permits both
+ * bits in per-project masks, so decoding them here keeps `where: { canBudget: true }`
+ * queries working without forcing frontends to bit-AND raw masks.
  *
  * Note: This event may be emitted BEFORE ProjectCreated in the same transaction.
  */
@@ -606,11 +609,12 @@ export function handleProjectRolePermSet(event: ProjectRolePermSet): void {
   }
 
   perm.mask = mask;
-  // Decode permission bits: CREATE=1, CLAIM=2, REVIEW=4, ASSIGN=8
   perm.canCreate = (mask & 1) != 0;
   perm.canClaim = (mask & 2) != 0;
   perm.canReview = (mask & 4) != 0;
   perm.canAssign = (mask & 8) != 0;
+  perm.canSelfReview = (mask & 16) != 0;
+  perm.canBudget = (mask & 32) != 0;
   perm.setAt = event.block.timestamp;
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
