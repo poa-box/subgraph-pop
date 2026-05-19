@@ -60,6 +60,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
     creatorHatIds.push(roleHatIds[i]);
   }
   taskManager.creatorHatIds = creatorHatIds;
+  taskManager.organizerHatIds = []; // populated by OrganizerHatAllowed events (TaskManager v4)
 
   // Create HybridVotingContract entity
   let hybridVoting = new HybridVotingContract(event.params.hybridVoting);

@@ -303,6 +303,13 @@ describe("OrgDeployer", () => {
       "creatorHatIds",
       "[1002, 1003]"
     );
+    // organizerHatIds (v4) is initialized empty; populated later by OrganizerHatAllowed events.
+    assert.fieldEquals(
+      "TaskManager",
+      "0x0000000000000000000000000000000000000006",
+      "organizerHatIds",
+      "[]"
+    );
   });
 
   test("TaskManager.creatorHatIds empty when only member role in roleHatIds", () => {

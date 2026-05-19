@@ -104,6 +104,7 @@ function setupEligibilityModuleEntities(): void {
   let taskManager = new TaskManager(taskManagerAddress);
   taskManager.organization = orgId;
   taskManager.creatorHatIds = [BigInt.fromI32(1002)];
+  taskManager.organizerHatIds = []; // populated by OrganizerHatAllowed events (v4)
   taskManager.createdAt = BigInt.fromI32(1000);
   taskManager.createdAtBlock = BigInt.fromI32(100);
   taskManager.transactionHash = Bytes.fromHexString("0xabcd");
