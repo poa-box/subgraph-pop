@@ -184,6 +184,13 @@ export function handleMemberHatIdsUpdated(event: MemberHatIdsUpdatedEvent): void
 
   let hatIds = event.params.hatIds;
 
+  // Persist the full member-hat list on the contract entity. This is the
+  // source of truth for "which hats can be claimed via quickJoinWithUser
+  // without vouching" and replaces the on-chain memberHatIds() call the
+  // frontend currently makes from useOrgStructure.
+  contract.memberHatIds = hatIds;
+  contract.save();
+
   // Update all member hats based on the new list
   for (let i = 0; i < hatIds.length; i++) {
     let hatId = hatIds[i];

@@ -7,11 +7,13 @@ import {
 } from "matchstick-as/assembly/index";
 import { Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
 import {
+  handleMemberHatIdsUpdated,
   handleRegisterAndQuickJoined,
   handleRegisterAndQuickJoinedWithPasskey,
   handleRegisterAndQuickJoinedWithPasskeyByMaster
 } from "../src/quick-join";
 import {
+  createMemberHatIdsUpdatedEvent,
   createRegisterAndQuickJoinedEvent,
   createRegisterAndQuickJoinedWithPasskeyEvent,
   createRegisterAndQuickJoinedWithPasskeyByMasterEvent
@@ -44,6 +46,7 @@ function setupQuickJoinEntities(): void {
   quickJoin.hatsContract = Address.zero();
   quickJoin.accountRegistry = Address.zero();
   quickJoin.masterDeployAddress = Address.zero();
+  quickJoin.memberHatIds = [];
   quickJoin.createdAt = BigInt.fromI32(1000);
   quickJoin.createdAtBlock = BigInt.fromI32(100);
 
@@ -154,6 +157,43 @@ describe("QuickJoin - Register and Join", () => {
       assert.fieldEquals("PasskeyQuickJoin", eventId, "username", "charlie");
       assert.fieldEquals("PasskeyQuickJoin", eventId, "quickJoinContract", QUICK_JOIN_ADDRESS.toHexString());
       assert.fieldEquals("PasskeyQuickJoin", eventId, "credentialId", credentialId.toHexString());
+    });
+  });
+
+  describe("handleMemberHatIdsUpdated", () => {
+    // Use unmocked-event sender so QUICK_JOIN_ADDRESS matches the entity created
+    // in setupQuickJoinEntities (newMockEvent's default address).
+    test("persists the hat list onto QuickJoinContract.memberHatIds", () => {
+      setupQuickJoinEntities();
+
+      let hatIds: BigInt[] = [BigInt.fromI32(1001), BigInt.fromI32(1002), BigInt.fromI32(1003)];
+
+      let event = createMemberHatIdsUpdatedEvent(hatIds);
+      handleMemberHatIdsUpdated(event);
+
+      assert.fieldEquals(
+        "QuickJoinContract",
+        QUICK_JOIN_ADDRESS.toHexString(),
+        "memberHatIds",
+        "[1001, 1002, 1003]"
+      );
+    });
+
+    test("overwrites previous list when called again", () => {
+      setupQuickJoinEntities();
+
+      let first = createMemberHatIdsUpdatedEvent([BigInt.fromI32(1001), BigInt.fromI32(1002)]);
+      handleMemberHatIdsUpdated(first);
+
+      let second = createMemberHatIdsUpdatedEvent([BigInt.fromI32(2001)]);
+      handleMemberHatIdsUpdated(second);
+
+      assert.fieldEquals(
+        "QuickJoinContract",
+        QUICK_JOIN_ADDRESS.toHexString(),
+        "memberHatIds",
+        "[2001]"
+      );
     });
   });
 });

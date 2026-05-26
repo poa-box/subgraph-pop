@@ -106,6 +106,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   quickJoin.hatsContract = Address.zero(); // Will be set by Initialized event
   quickJoin.accountRegistry = Address.zero(); // Will be set by Initialized event
   quickJoin.masterDeployAddress = Address.zero(); // Will be set by Initialized event
+  quickJoin.memberHatIds = []; // Populated by MemberHatIdsUpdated event
   quickJoin.createdAt = event.block.timestamp;
   quickJoin.createdAtBlock = event.block.number;
 

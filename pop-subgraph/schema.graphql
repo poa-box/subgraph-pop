@@ -962,6 +962,9 @@ type QuickJoinContract @entity(immutable: false) {
   accountRegistry: Bytes!
   masterDeployAddress: Bytes!
   universalFactory: Bytes # PasskeyAccountFactory address for passkey joins
+  # Hats anyone can claim via quickJoinWithUser without vouching. Mirrors the
+  # on-chain QuickJoin.memberHatIds() array; updated by MemberHatIdsUpdated.
+  memberHatIds: [BigInt!]!
   createdAt: BigInt!
   createdAtBlock: BigInt!
   joinEvents: [QuickJoinEvent!]! @derivedFrom(field: "quickJoin")
