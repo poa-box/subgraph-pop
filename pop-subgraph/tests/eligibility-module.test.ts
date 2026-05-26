@@ -497,6 +497,38 @@ describe("EligibilityModule - DefaultEligibilityUpdated", () => {
     let roleId = orgId.toHexString() + "-" + newHatId.toString();
     assert.entityCount("Role", 1);
     assert.fieldEquals("Role", roleId, "hat", hatEntityId);
+
+    // Governance-created hats join the org's role list so the frontend
+    // surfaces them in role pickers without a redeploy.
+    assert.fieldEquals(
+      "Organization",
+      orgId.toHexString(),
+      "roleHatIds",
+      "[1001, 1002, 3001]"
+    );
+    assert.fieldEquals("Role", roleId, "isUserRole", "true");
+  });
+
+  test("HatCreatedWithEligibility is idempotent on roleHatIds", () => {
+    setupEligibilityModuleEntities();
+
+    let creator = Address.fromString("0x0000000000000000000000000000000000000099");
+    let parentHatId = BigInt.fromI32(1000);
+    let newHatId = BigInt.fromI32(3001);
+
+    let event = createHatCreatedWithEligibilityEvent(
+      creator, parentHatId, newHatId, true, true, BigInt.fromI32(0)
+    );
+    handleHatCreatedWithEligibility(event);
+    handleHatCreatedWithEligibility(event);
+
+    let orgId = Bytes.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
+    assert.fieldEquals(
+      "Organization",
+      orgId.toHexString(),
+      "roleHatIds",
+      "[1001, 1002, 3001]"
+    );
   });
 });
 
