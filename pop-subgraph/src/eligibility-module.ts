@@ -26,6 +26,8 @@ import {
   EligibilityModuleContract,
   Hat,
   HatMetadata,
+  Organization,
+  Role,
   WearerEligibility,
   VouchConfig,
   Vouch,
@@ -162,8 +164,38 @@ export function handleHatCreatedWithEligibility(
   // Link Hat to Role entity + populate HatLookup.hat so HatStatusChanged
   // can resolve hatId -> Hat entity.
   if (eligibilityModule) {
-    linkHatToRole(eligibilityModule.organization, hatId, hatEntityId, event);
+    let role = linkHatToRole(eligibilityModule.organization, hatId, hatEntityId, event);
     linkHatToLookup(hatId, eligibilityModule.organization, hatEntityId);
+
+    // Genesis hats are minted via Hats.createHat in Deployer.sol (no
+    // HatCreatedWithEligibility emitted). Every HatCreatedWithEligibility we
+    // see post-genesis is a governance-created user role — surface it to the
+    // org's role list so the frontend's role pickers, permission UI and
+    // member sidebar pick it up without a redeploy.
+    let org = Organization.load(eligibilityModule.organization);
+    if (org) {
+      let existing = org.roleHatIds;
+      let alreadyTracked = false;
+      if (existing) {
+        for (let i = 0; i < existing.length; i++) {
+          if (existing[i].equals(hatId)) {
+            alreadyTracked = true;
+            break;
+          }
+        }
+      }
+      if (!alreadyTracked) {
+        let updated = existing ? existing : new Array<BigInt>(0);
+        updated.push(hatId);
+        org.roleHatIds = updated;
+        org.lastUpdatedAt = event.block.timestamp;
+        org.save();
+      }
+      if (role.isUserRole != true) {
+        role.isUserRole = true;
+        role.save();
+      }
+    }
   }
 }
 
