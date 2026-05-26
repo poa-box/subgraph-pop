@@ -152,6 +152,7 @@ function setupEligibilityModuleEntities(): void {
   quickJoin.hatsContract = Address.zero();
   quickJoin.accountRegistry = Address.zero();
   quickJoin.masterDeployAddress = Address.zero();
+  quickJoin.memberHatIds = [];
   quickJoin.createdAt = BigInt.fromI32(1000);
   quickJoin.createdAtBlock = BigInt.fromI32(100);
 

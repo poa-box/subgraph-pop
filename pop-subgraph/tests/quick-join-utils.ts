@@ -1,10 +1,24 @@
 import { newMockEvent } from "matchstick-as";
 import { ethereum, Address, BigInt, Bytes } from "@graphprotocol/graph-ts";
 import {
+  MemberHatIdsUpdated,
   RegisterAndQuickJoined,
   RegisterAndQuickJoinedWithPasskey,
   RegisterAndQuickJoinedWithPasskeyByMaster
 } from "../generated/templates/QuickJoin/QuickJoin";
+
+export function createMemberHatIdsUpdatedEvent(
+  hatIds: BigInt[]
+): MemberHatIdsUpdated {
+  let event = changetype<MemberHatIdsUpdated>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatIds", ethereum.Value.fromUnsignedBigIntArray(hatIds))
+  );
+
+  return event;
+}
 
 export function createRegisterAndQuickJoinedEvent(
   user: Address,
