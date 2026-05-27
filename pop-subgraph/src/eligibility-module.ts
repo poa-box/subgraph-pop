@@ -1,5 +1,6 @@
 import { Address, BigInt, Bytes, DataSourceContext, log } from "@graphprotocol/graph-ts";
 import { HatMetadata as HatMetadataTemplate } from "../generated/templates";
+import { Hats } from "../generated/Hats/Hats";
 import {
   EligibilityModuleInitialized as EligibilityModuleInitializedEvent,
   HatCreatedWithEligibility as HatCreatedWithEligibilityEvent,
@@ -159,6 +160,36 @@ export function handleHatCreatedWithEligibility(
   hat.createdAtBlock = event.block.number;
   hat.transactionHash = event.transaction.hash;
 
+  // Pull the role name + image off Hats Protocol. createHatWithEligibility
+  // passes the name/image as the `details`/`imageURI` args to Hats.createHat,
+  // but the EligibilityModule's HatCreatedWithEligibility event doesn't carry
+  // them — it only carries the new hatId and default flags. Without a read
+  // here, governance-created roles render as placeholder "Role N" in the
+  // frontend (the deployer wizard's roles get names from a separate
+  // RolesCreated event that createRole proposals don't emit).
+  //
+  // We use the EligibilityModule's stored hatsContract address rather than
+  // hardcoding it. If the contract call reverts (very unlikely — the hat was
+  // just created in the same tx), we leave name/image null and the frontend
+  // falls back to its existing "Role N" placeholder; the role still appears.
+  let roleName: string | null = null;
+  let roleImage: string | null = null;
+  if (eligibilityModule) {
+    let hatsContract = Hats.bind(Address.fromBytes(eligibilityModule.hatsContract));
+    let viewResult = hatsContract.try_viewHat(hatId);
+    if (!viewResult.reverted) {
+      let details = viewResult.value.getDetails();
+      let imageURI = viewResult.value.getImageURI();
+      if (details.length > 0) {
+        hat.name = details;
+        roleName = details;
+      }
+      if (imageURI.length > 0) {
+        roleImage = imageURI;
+      }
+    }
+  }
+
   hat.save();
 
   // Link Hat to Role entity + populate HatLookup.hat so HatStatusChanged
@@ -191,10 +222,25 @@ export function handleHatCreatedWithEligibility(
         org.lastUpdatedAt = event.block.timestamp;
         org.save();
       }
+      // Update Role.isUserRole + name/image. We always overwrite name/image
+      // when viewHat returned a non-empty value: createHatWithEligibility is
+      // the authoritative source for those fields at creation time, and we
+      // shouldn't keep stale nulls if a prior call (e.g. handler ordering)
+      // created the Role entity without them.
+      let roleChanged = false;
       if (role.isUserRole != true) {
         role.isUserRole = true;
-        role.save();
+        roleChanged = true;
       }
+      if (roleName !== null && role.name != roleName) {
+        role.name = roleName;
+        roleChanged = true;
+      }
+      if (roleImage !== null && role.image != roleImage) {
+        role.image = roleImage;
+        roleChanged = true;
+      }
+      if (roleChanged) role.save();
     }
   }
 }
