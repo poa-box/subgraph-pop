@@ -26,6 +26,7 @@ import {
   handleHatMetadataUpdated,
   handleHatCreatedWithEligibility,
   handleDefaultEligibilityUpdated,
+  handleEligibilityModuleAdminHatSet,
   handleRoleApplicationSubmitted,
   handleRoleApplicationWithdrawn
 } from "../src/eligibility-module";
@@ -33,6 +34,7 @@ import {
   createHatMetadataUpdatedEvent,
   createHatCreatedWithEligibilityEvent,
   createDefaultEligibilityUpdatedEvent,
+  createEligibilityModuleAdminHatSetEvent,
   createRoleApplicationSubmittedEvent,
   createRoleApplicationWithdrawnEvent
 } from "./eligibility-module-utils";
@@ -528,6 +530,111 @@ describe("EligibilityModule - DefaultEligibilityUpdated", () => {
       orgId.toHexString(),
       "roleHatIds",
       "[1001, 1002, 3001]"
+    );
+  });
+});
+
+describe("EligibilityModule - EligibilityModuleAdminHatSet", () => {
+  afterEach(() => {
+    clearStore();
+  });
+
+  test("Removes admin hat from org.roleHatIds and forces Role.isUserRole = false", () => {
+    setupEligibilityModuleEntities();
+
+    // Simulate the post-PR-#180 state where the admin hat snuck into the
+    // org's role list (this is what Test6 currently looks like — see issue).
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let adminHatId = BigInt.fromI32(2500);
+    let org = Organization.load(orgId);
+    if (org) {
+      org.roleHatIds = [BigInt.fromI32(1001), BigInt.fromI32(1002), adminHatId];
+      org.save();
+    }
+
+    // Seed a Role entity for the admin hat with isUserRole=true to mirror
+    // the bad state on Test6. The handler should flip it back to false.
+    let roleId = orgId.toHexString() + "-" + adminHatId.toString();
+    let role = new Role(roleId);
+    role.organization = orgId;
+    role.hatId = adminHatId;
+    role.isUserRole = true;
+    role.createdAt = BigInt.fromI32(1000);
+    role.createdAtBlock = BigInt.fromI32(100);
+    role.transactionHash = Bytes.fromHexString("0xabcd");
+    role.save();
+
+    let event = createEligibilityModuleAdminHatSetEvent(adminHatId);
+    handleEligibilityModuleAdminHatSet(event);
+
+    // Admin hat is stripped from the user-facing role list.
+    assert.fieldEquals(
+      "Organization",
+      orgId.toHexString(),
+      "roleHatIds",
+      "[1001, 1002]"
+    );
+    // And its Role is no longer flagged as user-facing.
+    assert.fieldEquals("Role", roleId, "isUserRole", "false");
+    // The contract entity records the admin hat (for callers that need it).
+    assert.fieldEquals(
+      "EligibilityModuleContract",
+      "0xa16081f360e3847006db660bae1c6d1b2e17ec2a",
+      "eligibilityModuleAdminHat",
+      "2500"
+    );
+  });
+
+  test("Idempotent — running twice leaves state stable", () => {
+    setupEligibilityModuleEntities();
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let adminHatId = BigInt.fromI32(2500);
+    let org = Organization.load(orgId);
+    if (org) {
+      org.roleHatIds = [BigInt.fromI32(1001), BigInt.fromI32(1002), adminHatId];
+      org.save();
+    }
+
+    let event = createEligibilityModuleAdminHatSetEvent(adminHatId);
+    handleEligibilityModuleAdminHatSet(event);
+    handleEligibilityModuleAdminHatSet(event);
+
+    assert.fieldEquals(
+      "Organization",
+      orgId.toHexString(),
+      "roleHatIds",
+      "[1001, 1002]"
+    );
+  });
+
+  test("No-op when admin hat isn't in roleHatIds and no Role exists", () => {
+    setupEligibilityModuleEntities();
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let adminHatId = BigInt.fromI32(9999);
+    // roleHatIds stays as the setup default [1001, 1002] — admin hat is
+    // not in there, no Role exists for it. The handler should still
+    // record the admin hat on the contract entity without touching org.
+
+    let event = createEligibilityModuleAdminHatSetEvent(adminHatId);
+    handleEligibilityModuleAdminHatSet(event);
+
+    assert.fieldEquals(
+      "Organization",
+      orgId.toHexString(),
+      "roleHatIds",
+      "[1001, 1002]"
+    );
+    assert.fieldEquals(
+      "EligibilityModuleContract",
+      "0xa16081f360e3847006db660bae1c6d1b2e17ec2a",
+      "eligibilityModuleAdminHat",
+      "9999"
     );
   });
 });
