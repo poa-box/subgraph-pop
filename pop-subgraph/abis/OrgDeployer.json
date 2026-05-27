@@ -526,6 +526,23 @@
                 "internalType": "uint32"
               }
             ]
+          },
+          {
+            "name": "taskManagerPerms",
+            "type": "tuple",
+            "internalType": "struct OrgDeployer.TaskManagerPermConfig",
+            "components": [
+              {
+                "name": "roleIndices",
+                "type": "uint256[]",
+                "internalType": "uint256[]"
+              },
+              {
+                "name": "masks",
+                "type": "uint8[]",
+                "internalType": "uint8[]"
+              }
+            ]
           }
         ]
       }
