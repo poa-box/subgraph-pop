@@ -73,6 +73,24 @@
   },
   {
     "type": "function",
+    "name": "bootstrapGlobalPerms",
+    "inputs": [
+      {
+        "name": "hatIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "masks",
+        "type": "uint8[]",
+        "internalType": "uint8[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "bootstrapProjectsAndTasks",
     "inputs": [
       {
@@ -562,6 +580,24 @@
   },
   {
     "type": "function",
+    "name": "setFolders",
+    "inputs": [
+      {
+        "name": "expectedCurrentRoot",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "newRoot",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setProjectRolePerm",
     "inputs": [
       {
@@ -634,6 +670,29 @@
         "name": "newBountyPayout",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateTaskMetadata",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "newTitle",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "newMetadataHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "outputs": [],
@@ -1233,6 +1292,22 @@
   },
   {
     "type": "error",
+    "name": "FoldersRootStale",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "actual",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "InvalidIndex",
     "inputs": []
   },
@@ -1289,6 +1364,11 @@
   {
     "type": "error",
     "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotOrganizer",
     "inputs": []
   },
   {

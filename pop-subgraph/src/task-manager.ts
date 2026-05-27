@@ -615,6 +615,8 @@ export function handleProjectRolePermSet(event: ProjectRolePermSet): void {
   perm.canAssign = (mask & 8) != 0;
   perm.canSelfReview = (mask & 16) != 0;
   perm.canBudget = (mask & 32) != 0;
+  perm.canEditMeta = (mask & 64) != 0;
+  perm.canEditFull = (mask & 128) != 0;
   perm.setAt = event.block.timestamp;
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
@@ -839,6 +841,8 @@ export function handleRolePermSet(event: RolePermSet): void {
   perm.canAssign = (mask & 8) != 0;
   perm.canSelfReview = (mask & 16) != 0;
   perm.canBudget = (mask & 32) != 0;
+  perm.canEditMeta = (mask & 64) != 0;
+  perm.canEditFull = (mask & 128) != 0;
   perm.setAt = event.block.timestamp;
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
