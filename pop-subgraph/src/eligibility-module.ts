@@ -641,47 +641,8 @@ export function handleEligibilityModuleAdminHatSet(
     return;
   }
 
-  let adminHatId = event.params.hatId;
-  contract.eligibilityModuleAdminHat = adminHatId;
+  contract.eligibilityModuleAdminHat = event.params.hatId;
   contract.save();
-
-  // The admin hat is a system hat — its wearer is the EligibilityModule
-  // contract itself, not a user. It shouldn't appear in user-facing role
-  // pickers, the team-page role tree, or the leaderboard. Strip it from
-  // org.roleHatIds and force Role.isUserRole = false so every downstream
-  // consumer skips it cleanly.
-  //
-  // We do this on every admin-hat-set event (typically fires once, at
-  // genesis), so a subgraph re-index from block 0 correctly excludes the
-  // admin hat from already-deployed orgs — no contracts change needed.
-  let orgId = contract.organization;
-  let roleId = orgId.toHexString() + "-" + adminHatId.toString();
-  let role = Role.load(roleId);
-  if (role != null && role.isUserRole != false) {
-    role.isUserRole = false;
-    role.save();
-  }
-
-  let org = Organization.load(orgId);
-  if (org != null) {
-    let existing = org.roleHatIds;
-    if (existing != null && existing.length > 0) {
-      let filtered = new Array<BigInt>(0);
-      let removed = false;
-      for (let i = 0; i < existing.length; i++) {
-        if (existing[i].equals(adminHatId)) {
-          removed = true;
-        } else {
-          filtered.push(existing[i]);
-        }
-      }
-      if (removed) {
-        org.roleHatIds = filtered;
-        org.lastUpdatedAt = event.block.timestamp;
-        org.save();
-      }
-    }
-  }
 }
 
 export function handleGovernanceAdminSet(
