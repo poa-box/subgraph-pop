@@ -4,9 +4,23 @@ import {
   HatMetadataUpdated,
   HatCreatedWithEligibility,
   DefaultEligibilityUpdated,
+  EligibilityModuleAdminHatSet,
   RoleApplicationSubmitted,
   RoleApplicationWithdrawn
 } from "../generated/templates/EligibilityModule/EligibilityModule";
+
+export function createEligibilityModuleAdminHatSetEvent(
+  hatId: BigInt
+): EligibilityModuleAdminHatSet {
+  let event = changetype<EligibilityModuleAdminHatSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+
+  return event;
+}
 
 export function createHatMetadataUpdatedEvent(
   hatId: BigInt,
