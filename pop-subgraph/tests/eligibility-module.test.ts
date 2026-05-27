@@ -3,9 +3,10 @@ import {
   describe,
   test,
   clearStore,
-  afterEach
+  afterEach,
+  createMockedFunction
 } from "matchstick-as/assembly/index";
-import { Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
+import { Address, Bytes, BigInt, ethereum } from "@graphprotocol/graph-ts";
 
 /**
  * Helper function to convert bytes32 sha256 digest to IPFS CIDv0.
@@ -202,6 +203,39 @@ function setupEligibilityModuleEntities(): void {
   educationHub.save();
   paymentManager.save();
   organization.save();
+}
+
+/**
+ * Stub Hats.viewHat(hatId) at the given Hats contract address. The handler
+ * calls try_viewHat for every HatCreatedWithEligibility event to pull the
+ * role name + image off chain; matchstick fails the test if the call has no
+ * mock, so every test that exercises handleHatCreatedWithEligibility needs
+ * one. Pass empty strings to keep the default "no name extracted" behavior.
+ */
+function mockViewHat(
+  hatsAddress: Address,
+  hatId: BigInt,
+  details: string,
+  imageURI: string
+): void {
+  createMockedFunction(
+    hatsAddress,
+    "viewHat",
+    "viewHat(uint256):(string,uint32,uint32,address,address,string,uint16,uint8,bool,bool)"
+  )
+    .withArgs([ethereum.Value.fromUnsignedBigInt(hatId)])
+    .returns([
+      ethereum.Value.fromString(details),
+      ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(1)),
+      ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)),
+      ethereum.Value.fromAddress(Address.zero()),
+      ethereum.Value.fromAddress(Address.zero()),
+      ethereum.Value.fromString(imageURI),
+      ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)),
+      ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(1)),
+      ethereum.Value.fromBoolean(true),
+      ethereum.Value.fromBoolean(true)
+    ]);
 }
 
 /**
@@ -476,6 +510,10 @@ describe("EligibilityModule - DefaultEligibilityUpdated", () => {
     let parentHatId = BigInt.fromI32(1000);
     let newHatId = BigInt.fromI32(3001);
 
+    // Setup defaults hatsContract to Address.zero(); empty viewHat result
+    // means the handler leaves name/image untouched.
+    mockViewHat(Address.zero(), newHatId, "", "");
+
     let event = createHatCreatedWithEligibilityEvent(
       creator,
       parentHatId,
@@ -516,6 +554,8 @@ describe("EligibilityModule - DefaultEligibilityUpdated", () => {
     let parentHatId = BigInt.fromI32(1000);
     let newHatId = BigInt.fromI32(3001);
 
+    mockViewHat(Address.zero(), newHatId, "", "");
+
     let event = createHatCreatedWithEligibilityEvent(
       creator, parentHatId, newHatId, true, true, BigInt.fromI32(0)
     );
@@ -529,6 +569,62 @@ describe("EligibilityModule - DefaultEligibilityUpdated", () => {
       "roleHatIds",
       "[1001, 1002, 3001]"
     );
+  });
+
+  test("HatCreatedWithEligibility populates Role.name + image from Hats.viewHat", () => {
+    setupEligibilityModuleEntities();
+
+    // Point the EligibilityModule at a known Hats contract address so the
+    // handler's Hats.bind(eligibilityModule.hatsContract) targets something
+    // we can mock. Setup defaults to Address.zero() which has no mock here.
+    let hatsAddr = Address.fromString("0x000000000000000000000000000000000000abcd");
+    let modAddr = Address.fromString("0xa16081f360e3847006db660bae1c6d1b2e17ec2a");
+    let mod = EligibilityModuleContract.load(modAddr);
+    if (mod) {
+      mod.hatsContract = hatsAddr;
+      mod.save();
+    }
+
+    let creator = Address.fromString("0x0000000000000000000000000000000000000099");
+    let parentHatId = BigInt.fromI32(1000);
+    let newHatId = BigInt.fromI32(3002);
+
+    // Mock Hats.viewHat(3002) → (details="Treasurer", maxSupply=5, supply=0,
+    // eligibility=mod, toggle=0, imageURI="ipfs://logo", lastHatId=0, level=4,
+    // active=true, mutable=true).
+    createMockedFunction(
+      hatsAddr,
+      "viewHat",
+      "viewHat(uint256):(string,uint32,uint32,address,address,string,uint16,uint8,bool,bool)"
+    )
+      .withArgs([ethereum.Value.fromUnsignedBigInt(newHatId)])
+      .returns([
+        ethereum.Value.fromString("Treasurer"),
+        ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(5)),
+        ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)),
+        ethereum.Value.fromAddress(modAddr),
+        ethereum.Value.fromAddress(Address.zero()),
+        ethereum.Value.fromString("ipfs://logo"),
+        ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)),
+        ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(4)),
+        ethereum.Value.fromBoolean(true),
+        ethereum.Value.fromBoolean(true)
+      ]);
+
+    let event = createHatCreatedWithEligibilityEvent(
+      creator, parentHatId, newHatId, true, true, BigInt.fromI32(0)
+    );
+    handleHatCreatedWithEligibility(event);
+
+    let orgId = Bytes.fromHexString("0x1111111111111111111111111111111111111111111111111111111111111111");
+    let roleId = orgId.toHexString() + "-" + newHatId.toString();
+    let hatEntityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-3002";
+
+    // Name should be picked up on both Hat and Role.
+    assert.fieldEquals("Hat", hatEntityId, "name", "Treasurer");
+    assert.fieldEquals("Role", roleId, "name", "Treasurer");
+    assert.fieldEquals("Role", roleId, "image", "ipfs://logo");
+    assert.fieldEquals("Role", roleId, "isUserRole", "true");
   });
 });
 

@@ -31,5 +31,25 @@
     ],
     "name": "HatStatusChanged",
     "type": "event"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "_hatId", "type": "uint256" }
+    ],
+    "name": "viewHat",
+    "outputs": [
+      { "internalType": "string", "name": "details", "type": "string" },
+      { "internalType": "uint32", "name": "maxSupply", "type": "uint32" },
+      { "internalType": "uint32", "name": "supply", "type": "uint32" },
+      { "internalType": "address", "name": "eligibility", "type": "address" },
+      { "internalType": "address", "name": "toggle", "type": "address" },
+      { "internalType": "string", "name": "imageURI", "type": "string" },
+      { "internalType": "uint16", "name": "lastHatId", "type": "uint16" },
+      { "internalType": "uint8", "name": "level", "type": "uint8" },
+      { "internalType": "bool", "name": "active", "type": "bool" },
+      { "internalType": "bool", "name": "mutable_", "type": "bool" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   }
 ]
