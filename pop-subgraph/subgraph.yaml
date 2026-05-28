@@ -513,6 +513,8 @@ templates:
       abis:
         - name: EligibilityModule
           file: ./abis/EligibilityModule.json
+        - name: Hats
+          file: ./abis/Hats.json
       eventHandlers:
         - event: EligibilityModuleInitialized(indexed address,indexed address)
           handler: handleEligibilityModuleInitialized
