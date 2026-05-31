@@ -3,9 +3,10 @@ import {
   describe,
   test,
   clearStore,
-  afterEach
+  afterEach,
+  createMockedFunction
 } from "matchstick-as/assembly/index";
-import { Address, BigInt, Bytes } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import {
   handleInitialized,
   handleExecutorUpdated,
@@ -186,6 +187,18 @@ function setupHybridVotingContract(contractAddress: Address): void {
   organization.save();
 }
 
+/**
+ * Mock HybridVoting.creatorHats() — the on-chain enumeration handleInitialized
+ * reads to backfill creator hats that initialize() seeded without events.
+ */
+function mockCreatorHats(contractAddress: Address, hatIds: BigInt[]): void {
+  createMockedFunction(
+    contractAddress,
+    "creatorHats",
+    "creatorHats():(uint256[])"
+  ).returns([ethereum.Value.fromUnsignedBigIntArray(hatIds)]);
+}
+
 describe("HybridVoting", () => {
   afterEach(() => {
     clearStore();
@@ -198,10 +211,14 @@ describe("HybridVoting", () => {
 
       // Setup contract first (simulating OrgDeployed)
       setupHybridVotingContract(event.address);
+      // initialize() seeds creator hats with no event; handler reads them on-chain.
+      mockCreatorHats(event.address, []);
 
       handleInitialized(event);
 
       assert.entityCount("HybridVotingContract", 1);
+      // No creator hats configured → no permissions backfilled.
+      assert.entityCount("HatPermission", 0);
 
       // Verify contract still exists with default values
       let contractId = event.address.toHexString();
@@ -213,6 +230,74 @@ describe("HybridVoting", () => {
       );
       assert.fieldEquals("HybridVotingContract", contractId, "thresholdPct", "0");
       assert.fieldEquals("HybridVotingContract", contractId, "quorum", "0");
+    });
+
+    test("Creator-hat permissions backfilled from on-chain creatorHats()", () => {
+      let event = createInitializedEvent(BigInt.fromI32(1));
+      setupHybridVotingContract(event.address);
+      // Two deploy-time creator hats that never emitted a HatSet event.
+      mockCreatorHats(event.address, [BigInt.fromI32(1001), BigInt.fromI32(1002)]);
+
+      handleInitialized(event);
+
+      assert.entityCount("HatPermission", 2);
+
+      let p1 = event.address.toHexString() + "-1001-Creator";
+      assert.fieldEquals("HatPermission", p1, "permissionRole", "Creator");
+      assert.fieldEquals("HatPermission", p1, "contractType", "HybridVoting");
+      assert.fieldEquals("HatPermission", p1, "allowed", "true");
+      assert.fieldEquals("HatPermission", p1, "hatId", "1001");
+
+      let p2 = event.address.toHexString() + "-1002-Creator";
+      assert.fieldEquals("HatPermission", p2, "allowed", "true");
+    });
+
+    test("Backfill is idempotent — a later HatSet overrides in place", () => {
+      let event = createInitializedEvent(BigInt.fromI32(1));
+      setupHybridVotingContract(event.address);
+      mockCreatorHats(event.address, [BigInt.fromI32(1001)]);
+
+      // Deploy-time backfill grants the creator hat...
+      handleInitialized(event);
+      let pid = event.address.toHexString() + "-1001-Creator";
+      assert.fieldEquals("HatPermission", pid, "allowed", "true");
+
+      // ...then governance revokes it post-deploy via setCreatorHatAllowed.
+      handleHatSet(createHatSetEvent(0, BigInt.fromI32(1001), false));
+
+      assert.entityCount("HatPermission", 1); // updated in place, not duplicated
+      assert.fieldEquals("HatPermission", pid, "allowed", "false");
+    });
+
+    test("An event-sourced permission is not clobbered by the backfill", () => {
+      let event = createInitializedEvent(BigInt.fromI32(1));
+      setupHybridVotingContract(event.address);
+
+      // Event arrives first (e.g. a post-deploy grant), recording hatType 0.
+      handleHatSet(createHatSetEvent(0, BigInt.fromI32(1001), true));
+      // Backfill then sees the same hat on-chain — must leave the row untouched.
+      mockCreatorHats(event.address, [BigInt.fromI32(1001)]);
+      handleInitialized(event);
+
+      assert.entityCount("HatPermission", 1);
+      let pid = event.address.toHexString() + "-1001-Creator";
+      assert.fieldEquals("HatPermission", pid, "allowed", "true");
+      assert.fieldEquals("HatPermission", pid, "hatType", "0"); // preserved from event
+    });
+
+    test("Reverting creatorHats() is tolerated — no crash, no permissions", () => {
+      let event = createInitializedEvent(BigInt.fromI32(1));
+      setupHybridVotingContract(event.address);
+      createMockedFunction(
+        event.address,
+        "creatorHats",
+        "creatorHats():(uint256[])"
+      ).reverts();
+
+      handleInitialized(event);
+
+      assert.entityCount("HybridVotingContract", 1);
+      assert.entityCount("HatPermission", 0);
     });
   });
 
