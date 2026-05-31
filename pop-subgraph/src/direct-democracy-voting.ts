@@ -1,5 +1,6 @@
 import { Address, Bytes, BigInt, DataSourceContext } from "@graphprotocol/graph-ts";
 import {
+  DirectDemocracyVoting as DirectDemocracyVotingAbi,
   Initialized,
   ExecutorUpdated,
   ThresholdPctSet,
@@ -26,7 +27,7 @@ import {
   ProposalMetadata
 } from "../generated/schema";
 import { ProposalMetadata as ProposalMetadataTemplate } from "../generated/templates";
-import { getUsernameForAddress, loadExistingUser, createExecutorChange, getOrCreateRole } from "./utils";
+import { getUsernameForAddress, loadExistingUser, createExecutorChange, getOrCreateRole, backfillVotingHatPermissions } from "./utils";
 
 // Zero hash constant for comparison
 const ZERO_HASH = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -78,7 +79,8 @@ function createProposalMetadataDataSource(descriptionHash: Bytes, proposalEntity
 
 /**
  * Handler for Initialized event
- * Updates the DirectDemocracyVotingContract entity with initialization data.
+ * Updates the DirectDemocracyVotingContract entity with initialization data and
+ * backfills the creator/voting-hat permissions seeded during initialize().
  * The entity should already exist, created by handleOrgDeployed.
  */
 export function handleInitialized(event: Initialized): void {
@@ -90,7 +92,38 @@ export function handleInitialized(event: Initialized): void {
     return;
   }
 
-  // Update initialization data
+  // Both creator and voting hats are seeded inside initialize() WITHOUT
+  // emitting per-hat events (HatSet/CreatorHatSet only fire for post-deploy
+  // changes), so the event handlers miss deploy-time grants. Read the
+  // authoritative on-chain enumerations now (initialize() has run) and
+  // backfill, so roles that can create polls or vote in polls appear in the
+  // permissions matrix.
+  let bound = DirectDemocracyVotingAbi.bind(event.address);
+
+  let creatorHats = bound.try_creatorHats();
+  if (!creatorHats.reverted) {
+    backfillVotingHatPermissions(
+      event.address,
+      "DirectDemocracyVoting",
+      contract.organization,
+      creatorHats.value,
+      "Creator",
+      event
+    );
+  }
+
+  let votingHats = bound.try_votingHats();
+  if (!votingHats.reverted) {
+    backfillVotingHatPermissions(
+      event.address,
+      "DirectDemocracyVoting",
+      contract.organization,
+      votingHats.value,
+      "Voter",
+      event
+    );
+  }
+
   // Note: executor, quorum, hats will be set by their respective events
   contract.save();
 }

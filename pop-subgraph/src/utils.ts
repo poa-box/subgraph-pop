@@ -180,6 +180,66 @@ export function createHatPermission(
 }
 
 /**
+ * Backfill HatPermission rows for hats read directly from a voting contract's
+ * on-chain enumeration — HybridVoting.creatorHats() and
+ * DirectDemocracyVoting.creatorHats()/votingHats().
+ *
+ * Why this is needed: both voting contracts seed these arrays inside
+ * initialize() via HatManager.setHatInArray WITHOUT emitting a per-hat
+ * HatSet/CreatorHatSet event — only the post-deploy setters emit. The
+ * event-driven handlers therefore never see grants made AT DEPLOYMENT, so a
+ * role that can create proposals/polls (or vote in polls) was rendered as "—"
+ * in the org permissions matrix. Reading the authoritative on-chain set once,
+ * at Initialized (after initialize() has run), closes that gap for both
+ * already-deployed and future orgs.
+ *
+ * Idempotent with the event handlers by design: identical `address-hatId-role`
+ * id scheme. If a row already exists we leave it untouched — an event carries
+ * the authoritative `allowed` flag and a precise timestamp, and a deploy-time
+ * read could only overwrite it with staler data. Conversely, any later
+ * grant/revoke flows through handleHatSet / handleCreatorHatSet and overrides
+ * what we seed here. hatType is intentionally left null: the array getters do
+ * not carry it and no consumer keys off it (the matrix uses contractType +
+ * permissionRole + allowed).
+ */
+export function backfillVotingHatPermissions(
+  contractAddress: Address,
+  contractType: string,
+  orgId: Bytes,
+  hatIds: Array<BigInt>,
+  permissionRole: string,
+  event: ethereum.Event
+): void {
+  for (let i = 0; i < hatIds.length; i++) {
+    let hatId = hatIds[i];
+    let id =
+      contractAddress.toHexString() + "-" + hatId.toString() + "-" + permissionRole;
+
+    // An event handler already recorded this grant authoritatively — keep it.
+    if (HatPermission.load(id) != null) {
+      continue;
+    }
+
+    let permission = new HatPermission(id);
+    permission.contractAddress = contractAddress;
+    permission.contractType = contractType;
+    permission.organization = orgId;
+    permission.hatId = hatId;
+    permission.permissionRole = permissionRole;
+
+    // Link to the Role entity (seeded from roleHatIds at OrgDeployed).
+    let role = getOrCreateRole(orgId, hatId, event);
+    permission.role = role.id;
+
+    permission.allowed = true; // membership in the on-chain array == allowed
+    permission.setAt = event.block.timestamp;
+    permission.setAtBlock = event.block.number;
+    permission.transactionHash = event.transaction.hash;
+    permission.save();
+  }
+}
+
+/**
  * Create a consolidated ExecutorChange entity
  * Used by: DirectDemocracyVoting, QuickJoin, EducationHub
  */

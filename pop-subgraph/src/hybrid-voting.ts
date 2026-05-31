@@ -1,5 +1,6 @@
 import { Address, Bytes, BigInt, DataSourceContext } from "@graphprotocol/graph-ts";
 import {
+  HybridVoting as HybridVotingAbi,
   Initialized,
   ExecutorUpdated,
   ThresholdPctSet,
@@ -26,7 +27,7 @@ import {
   ProposalMetadata
 } from "../generated/schema";
 import { ProposalMetadata as ProposalMetadataTemplate } from "../generated/templates";
-import { getUsernameForAddress, loadExistingUser, createHatPermission, createExecutorChange, getOrCreateRole } from "./utils";
+import { getUsernameForAddress, loadExistingUser, createHatPermission, createExecutorChange, getOrCreateRole, backfillVotingHatPermissions } from "./utils";
 
 // Zero hash constant for comparison
 const ZERO_HASH = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -78,7 +79,8 @@ function createProposalMetadataDataSource(descriptionHash: Bytes, proposalEntity
 
 /**
  * Handler for Initialized event
- * Updates the HybridVotingContract entity with initialization data.
+ * Updates the HybridVotingContract entity with initialization data and
+ * backfills the creator-hat permissions seeded during initialize().
  * The entity should already exist, created by handleOrgDeployed.
  */
 export function handleInitialized(event: Initialized): void {
@@ -90,7 +92,25 @@ export function handleInitialized(event: Initialized): void {
     return;
   }
 
-  // Update initialization data
+  // Creator hats are seeded inside initialize() WITHOUT emitting HatSet, so
+  // handleHatSet never sees deploy-time grants — a role that can create
+  // proposals would otherwise be missing from the permissions matrix. Read the
+  // authoritative on-chain set now (initialize() has run by this point) and
+  // backfill. HV voters are class-based (see handleClassesReplaced), so there
+  // is no voting-hat array to read here.
+  let bound = HybridVotingAbi.bind(event.address);
+  let creatorHats = bound.try_creatorHats();
+  if (!creatorHats.reverted) {
+    backfillVotingHatPermissions(
+      event.address,
+      "HybridVoting",
+      contract.organization,
+      creatorHats.value,
+      "Creator",
+      event
+    );
+  }
+
   // Note: executor, quorum, hats will be set by their respective events
   contract.save();
 }
