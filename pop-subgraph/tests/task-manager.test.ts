@@ -20,7 +20,8 @@ import {
   handleTaskRejected,
   handleFoldersUpdated,
   handleOrganizerHatAllowed,
-  handleRolePermSet
+  handleRolePermSet,
+  handleHatSet
 } from "../src/task-manager";
 import {
   createProjectCreatedEvent,
@@ -35,7 +36,8 @@ import {
   createTaskRejectedEvent,
   createFoldersUpdatedEvent,
   createOrganizerHatAllowedEvent,
-  createRolePermSetEvent
+  createRolePermSetEvent,
+  createHatSetEvent
 } from "./task-manager-utils";
 import { Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
@@ -1214,5 +1216,39 @@ describe("TaskManager", () => {
     assert.entityCount("GlobalRolePermission", 1); // not deleted
     assert.fieldEquals("GlobalRolePermission", id, "mask", "0");
     assert.fieldEquals("GlobalRolePermission", id, "canBudget", "false");
+  });
+
+  // ========================================
+  // HatSet (project-creator hats) Tests
+  // creatorHatIds reconciliation — see handleHatSet
+  // ========================================
+
+  test("HatSet(CREATOR) adds a project-creator hat to creatorHatIds", () => {
+    setupTaskManagerEntities();
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    // setup seeds creatorHatIds = [1002]; a deploy-time HatSet adds 1001.
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1001), true));
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002, 1001]");
+  });
+
+  test("HatSet(CREATOR) revoke removes the hat from creatorHatIds", () => {
+    setupTaskManagerEntities();
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1002), false));
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[]");
+  });
+
+  test("HatSet(CREATOR) re-adding an existing hat is idempotent", () => {
+    setupTaskManagerEntities();
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1002), true));
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002]");
+  });
+
+  test("HatSet with a non-creator hatType is ignored", () => {
+    setupTaskManagerEntities();
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    handleHatSet(createHatSetEvent(1, BigInt.fromI32(9999), true));
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002]");
   });
 });

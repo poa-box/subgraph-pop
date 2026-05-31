@@ -363,6 +363,8 @@ templates:
           handler: handleOrganizerHatAllowed
         - event: RolePermSet(indexed uint256,uint8)
           handler: handleRolePermSet
+        - event: HatSet(uint8,uint256,bool)
+          handler: handleHatSet
         - event: TaskCreated(indexed uint256,indexed
             bytes32,uint256,address,uint256,bool,bytes,bytes32)
           handler: handleTaskCreated

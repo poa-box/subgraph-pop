@@ -14,7 +14,8 @@ import {
   TaskRejected,
   FoldersUpdated,
   OrganizerHatAllowed,
-  RolePermSet
+  RolePermSet,
+  HatSet
 } from "../generated/templates/TaskManager/TaskManager";
 
 export function createProjectCreatedEvent(
@@ -297,6 +298,27 @@ export function createRolePermSetEvent(
   );
   event.parameters.push(
     new ethereum.EventParam("mask", ethereum.Value.fromI32(mask))
+  );
+
+  return event;
+}
+
+export function createHatSetEvent(
+  hatType: i32,
+  hat: BigInt,
+  allowed: boolean
+): HatSet {
+  let event = changetype<HatSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatType", ethereum.Value.fromI32(hatType))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hat", ethereum.Value.fromUnsignedBigInt(hat))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("allowed", ethereum.Value.fromBoolean(allowed))
   );
 
   return event;

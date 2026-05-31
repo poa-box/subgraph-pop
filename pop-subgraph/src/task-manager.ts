@@ -19,7 +19,8 @@ import {
   TaskRejected,
   FoldersUpdated,
   OrganizerHatAllowed,
-  RolePermSet
+  RolePermSet,
+  HatSet
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
@@ -847,4 +848,52 @@ export function handleRolePermSet(event: RolePermSet): void {
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
   perm.save();
+}
+
+/**
+ * Handler for HatSet (TaskManager).
+ *
+ * The TaskManager emits HatSet(HatType.CREATOR, hat, allowed) for PROJECT-creator hats —
+ * once per hat inside initialize() (deploy time) and again on
+ * setConfig(CREATOR_HAT_ALLOWED, ...). handleOrgDeployed seeds taskManager.creatorHatIds
+ * from a roleHatIds[1:] heuristic, which is wrong for orgs that don't follow the
+ * "index 0 is the only non-creator" convention (e.g. a member role that CAN create
+ * projects, or a non-member role that can't — and the array also goes stale as roleHatIds
+ * grows post-deploy). Reconciling against the events the contract actually emits keeps
+ * creatorHatIds — and the org-structure "Create Project" column — aligned with chain.
+ *
+ * hatType is always CREATOR (0) for the TaskManager; guard defensively anyway. Idempotent:
+ * adds the hat when allowed and absent, drops it when revoked, leaves the array otherwise.
+ */
+export function handleHatSet(event: HatSet): void {
+  if (event.params.hatType != 0) {
+    return;
+  }
+
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) {
+    return;
+  }
+
+  let hat = event.params.hat;
+  let current = taskManager.creatorHatIds;
+  let next: BigInt[] = [];
+  let present = false;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].equals(hat)) {
+      present = true;
+      // Keep it only while the grant is active; a revoke (allowed=false) drops it.
+      if (event.params.allowed) {
+        next.push(current[i]);
+      }
+    } else {
+      next.push(current[i]);
+    }
+  }
+  if (event.params.allowed && !present) {
+    next.push(hat);
+  }
+
+  taskManager.creatorHatIds = next;
+  taskManager.save();
 }
