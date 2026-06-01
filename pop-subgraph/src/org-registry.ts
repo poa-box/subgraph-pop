@@ -1,4 +1,4 @@
-import { BigInt, Bytes, DataSourceContext } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, DataSourceContext } from "@graphprotocol/graph-ts";
 import {
   OrgRegistered as OrgRegisteredEvent,
   MetaUpdated as MetaUpdatedEvent,
@@ -12,11 +12,27 @@ import {
   OrgMetaUpdate,
   OrgMetadata,
   RegisteredContract,
-  SwitchableBeaconContract
+  SwitchableBeaconContract,
+  EducationHubContract,
+  ParticipationTokenContract
 } from "../generated/schema";
 import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templates";
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
+import { EducationHub as EducationHubTemplate } from "../generated/templates";
 import { getOrCreateRole } from "./utils";
+
+// 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
+// zero-address entity at deploy time when the module was not deployed with the org.
+const ZERO_ADDRESS: Bytes = Bytes.fromHexString("0x0000000000000000000000000000000000000000");
+
+// keccak256("EducationHub") — the OrgRegistry typeId for the EducationHub module.
+// EducationHub is the only module that is OPTIONAL at org-deployment time
+// (ModulesFactory.EducationHubConfig.enabled); every other module is always deployed, and
+// OrgRegistry.registerOrgContract reverts `TypeTaken` for an already-registered type. So the
+// post-deployment registration path can only ever introduce an EducationHub today.
+const EDUCATION_HUB_TYPE_ID: Bytes = Bytes.fromHexString(
+  "0xa871f070b566fe185ede7c7d071cb2f92e7c75c6a2912b6f37c86a50cdc6bad3"
+);
 
 /**
  * Helper function to convert bytes32 sha256 digest to IPFS CIDv0.
@@ -243,6 +259,76 @@ export function handleContractRegistered(event: ContractRegisteredEvent): void {
 
   // Create dynamic data source to index SwitchableBeacon events
   SwitchableBeaconTemplate.create(beacon);
+
+  // Wire any module that is added to the org AFTER initial deployment (e.g. an EducationHub
+  // enabled via governance later). handleOrgDeployed only wires modules present at deploy time, so
+  // without this a post-hoc registration leaves Organization.educationHub pointing at the zero
+  // entity and the module's events never index.
+  wirePostDeployModule(orgId, typeId, proxy, event);
+}
+
+/**
+ * Wire a module registered AFTER the org's initial deployment into its typed Organization pointer
+ * and spin up its data-source template. No-op during the initial-deployment transaction (that is
+ * handled by handleOrgDeployed) and idempotent for modules already wired.
+ *
+ * Why this is keyed on typeId rather than handling every module: registerOrgContract reverts
+ * `TypeTaken` once a (orgId, typeId) pair is registered, so the only module that can legitimately
+ * arrive through this path is one that was absent at deploy. EducationHub is the sole optional
+ * module today; additional optional modules can be added as `else if` branches below.
+ */
+function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: ContractRegisteredEvent): void {
+  let org = Organization.load(orgId);
+  // deployedAtBlock is null until handleOrgDeployed runs. Guarding on it makes this robust to the
+  // event ordering inside the deployment tx: if ContractRegistered fires before OrgDeployed we skip
+  // (OrgDeployed will wire the module + template), avoiding a duplicate dynamic data source.
+  if (org == null || org.deployedAtBlock === null) {
+    return;
+  }
+
+  if (typeId.equals(EDUCATION_HUB_TYPE_ID)) {
+    // Idempotent: if the org already points at a real (non-zero) EducationHub, do nothing.
+    let current = org.educationHub;
+    if (current !== null && !changetype<Bytes>(current).equals(ZERO_ADDRESS)) {
+      return;
+    }
+
+    // The module's own initializer events (TokenSet/HatsSet/ExecutorSet) were emitted before this
+    // proxy's template exists, so they will not backfill. Seed the entity from known org context
+    // instead; handleTokenSet/HatsSet/ExecutorSet will keep it current from here on.
+    let eduHub = new EducationHubContract(proxy);
+    eduHub.organization = org.id;
+    eduHub.token = org.participationToken !== null ? changetype<Bytes>(org.participationToken) : ZERO_ADDRESS;
+    eduHub.executor = org.executorContract !== null ? changetype<Bytes>(org.executorContract) : ZERO_ADDRESS;
+    eduHub.hatsContract = resolveOrgHats(org);
+    eduHub.isPaused = false;
+    eduHub.nextModuleId = BigInt.fromI32(0);
+    eduHub.createdAt = event.block.timestamp;
+    eduHub.createdAtBlock = event.block.number;
+    eduHub.save();
+
+    org.educationHub = proxy;
+    org.lastUpdatedAt = event.block.timestamp;
+    org.save();
+
+    // Index the module's modules/completions/permission changes from this block forward.
+    EducationHubTemplate.create(Address.fromBytes(proxy));
+  }
+}
+
+/**
+ * Best-effort lookup of the org's Hats Protocol address from an already-indexed module entity.
+ * Falls back to the zero address (handleHatsSet will correct it if setHats is ever called).
+ */
+function resolveOrgHats(org: Organization): Bytes {
+  let pt = org.participationToken;
+  if (pt !== null) {
+    let ptc = ParticipationTokenContract.load(changetype<Bytes>(pt));
+    if (ptc != null && !ptc.hatsContract.equals(ZERO_ADDRESS)) {
+      return ptc.hatsContract;
+    }
+  }
+  return ZERO_ADDRESS;
 }
 
 /**

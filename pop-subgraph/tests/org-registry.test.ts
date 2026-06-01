@@ -32,6 +32,25 @@ import {
 // Default mock event address from matchstick
 const REGISTRY_ADDRESS = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
 
+// keccak256("EducationHub") — OrgRegistry typeId for the optional EducationHub module.
+const EDUCATION_HUB_TYPE_ID = "0xa871f070b566fe185ede7c7d071cb2f92e7c75c6a2912b6f37c86a50cdc6bad3";
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+// Helper: org deployed WITHOUT an EducationHub (educationHub points at the zero entity),
+// mirroring a real org like Decentral Park. `deployed` toggles whether OrgDeployed has run yet
+// (deployedAtBlock is null until it has).
+function createOrgWithoutEduHub(orgId: Bytes, deployed: boolean): void {
+  let org = new Organization(orgId);
+  org.executorContract = Bytes.fromHexString("0x0000000000000000000000000000000000000001");
+  org.participationToken = Bytes.fromHexString("0x0000000000000000000000000000000000000005");
+  org.educationHub = Bytes.fromHexString(ZERO_ADDRESS);
+  if (deployed) {
+    org.deployedAt = BigInt.fromI32(1000);
+    org.deployedAtBlock = BigInt.fromI32(100);
+  }
+  org.save();
+}
+
 /**
  * Helper function to convert bytes32 sha256 digest to IPFS CIDv0.
  * Mirrors the logic in org-registry.ts for test assertions.
@@ -441,6 +460,111 @@ describe("OrgRegistry", () => {
         "totalContracts",
         "2"
       );
+    });
+  });
+
+  describe("handleContractRegistered - post-deploy module wiring", () => {
+    test("wires Organization.educationHub + creates entity for a post-deploy EducationHub", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      // Org deployed without an EducationHub (the Decentral Park case).
+      createOrgWithoutEduHub(orgId, true);
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      // The typed pointer the frontend reads now resolves to the new proxy.
+      assert.fieldEquals("Organization", orgId.toHexString(), "educationHub", proxy.toHexString());
+
+      // The referenced EducationHubContract entity exists, seeded from org context.
+      assert.entityCount("EducationHubContract", 1);
+      assert.fieldEquals("EducationHubContract", proxy.toHexString(), "organization", orgId.toHexString());
+      assert.fieldEquals(
+        "EducationHubContract",
+        proxy.toHexString(),
+        "executor",
+        "0x0000000000000000000000000000000000000001"
+      );
+      assert.fieldEquals(
+        "EducationHubContract",
+        proxy.toHexString(),
+        "token",
+        "0x0000000000000000000000000000000000000005"
+      );
+      assert.fieldEquals("EducationHubContract", proxy.toHexString(), "nextModuleId", "0");
+
+      // The generic RegisteredContract row is still written.
+      assert.entityCount("RegisteredContract", 1);
+    });
+
+    test("is idempotent - does not overwrite an already-wired EducationHub", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      // Org already has a real EducationHub (e.g. it was deployed with one).
+      let org = new Organization(orgId);
+      org.executorContract = Bytes.fromHexString("0x0000000000000000000000000000000000000001");
+      org.participationToken = Bytes.fromHexString("0x0000000000000000000000000000000000000005");
+      org.educationHub = Bytes.fromHexString("0x00000000000000000000000000000000000000aa");
+      org.deployedAtBlock = BigInt.fromI32(100);
+      org.save();
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      // Pointer is unchanged and no new module entity is fabricated.
+      assert.fieldEquals(
+        "Organization",
+        orgId.toHexString(),
+        "educationHub",
+        "0x00000000000000000000000000000000000000aa"
+      );
+      assert.entityCount("EducationHubContract", 0);
+    });
+
+    test("skips wiring during initial deployment (deployedAtBlock null)", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      // OrgDeployed has not run yet (deployedAtBlock null); it will wire the module + template.
+      createOrgWithoutEduHub(orgId, false);
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      // Pointer stays at the zero entity; no module entity created here.
+      assert.fieldEquals("Organization", orgId.toHexString(), "educationHub", ZERO_ADDRESS);
+      assert.entityCount("EducationHubContract", 0);
+      // The generic RegisteredContract row is still written regardless.
+      assert.entityCount("RegisteredContract", 1);
     });
   });
 
