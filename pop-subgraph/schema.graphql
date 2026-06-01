@@ -1779,6 +1779,13 @@ type OrgMetadata @entity(immutable: false) {
   # actual symbol (e.g. "REP") instead of the default "Shares". Stored
   # nullable so missing/old metadata defaults to "Shares" client-side.
   useTokenSymbol: Boolean
+  # When true, task payouts ignore difficulty and are computed as
+  # taskPayoutHourlyRate × estimated hours (the org "pay by hours only"
+  # setting). Nullable so missing/old metadata defaults to false client-side.
+  taskPayoutHoursOnly: Boolean
+  # Tokens-per-hour rate used when taskPayoutHoursOnly is true. Can be
+  # fractional (e.g. 12.5); frontend defaults to 10 when missing.
+  taskPayoutHourlyRate: BigDecimal
   links: [OrgMetadataLink!]! @derivedFrom(field: "metadata")
   indexedAt: BigInt
 }
