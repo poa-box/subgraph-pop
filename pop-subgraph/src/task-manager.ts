@@ -77,8 +77,16 @@ function bytes32ToCid(hash: Bytes): string {
  *
  * Uses DataSourceContext to pass taskId and timestamp to the handler so it can
  * link the metadata back to the task and record when it was indexed.
+ *
+ * The TaskMetadata entity id is scoped by taskId (taskManager-taskId), NOT by tx
+ * hash. Batch task creation emits several TaskCreated events in one transaction
+ * (one tx hash); tasks with identical metadata (e.g. same title) produce the same
+ * CID. A txHash-CID id would collide across those tasks, spawning two file data
+ * sources that write the same entity id in the same block — which graph-node
+ * rejects ("can not append operations that go backwards"). taskId is unique per
+ * task, so taskId-CID never collides. Keep this in sync with task-metadata.ts.
  */
-function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp: BigInt, txHash: Bytes): void {
+function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp: BigInt): void {
   // Skip if metadataHash is empty (all zeros)
   let zeroHash = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
   if (metadataHash.equals(zeroHash)) {
@@ -88,8 +96,8 @@ function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp
   // Convert bytes32 sha256 digest to IPFS CIDv0 string
   let ipfsCid = bytes32ToCid(metadataHash);
 
-  // Entity ID includes tx hash for uniqueness
-  let entityId = txHash.toHexString() + "-" + ipfsCid;
+  // Entity ID is scoped by the (globally unique) task id for uniqueness
+  let entityId = taskId + "-" + ipfsCid;
 
   // Skip if TaskMetadata already exists (from previous blocks)
   let existingMetadata = TaskMetadata.load(entityId);
@@ -97,11 +105,10 @@ function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp
     return;
   }
 
-  // Create context to pass taskId, timestamp, and txHash to the IPFS handler
+  // Create context to pass taskId and timestamp to the IPFS handler
   let context = new DataSourceContext();
   context.setString("taskId", taskId);
   context.setBigInt("timestamp", timestamp);
-  context.setBytes("txHash", txHash);
 
   // Create the file data source with context
   TaskMetadataTemplate.createWithContext(ipfsCid, context);
@@ -207,14 +214,14 @@ export function handleTaskCreated(event: TaskCreated): void {
   task.createdAt = event.block.timestamp;
   task.createdAtBlock = event.block.number;
 
-  // Set metadata link using txHash-CID format for uniqueness
+  // Set metadata link using taskId-CID format for uniqueness
   let metadataCid = bytes32ToCid(event.params.metadataHash);
-  task.metadata = event.transaction.hash.toHexString() + "-" + metadataCid;
+  task.metadata = id + "-" + metadataCid;
 
   task.save();
 
   // Create IPFS data source to fetch and index task metadata
-  createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp, event.transaction.hash);
+  createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp);
 }
 
 export function handleTaskAssigned(event: TaskAssigned): void {
@@ -272,14 +279,14 @@ export function handleTaskSubmitted(event: TaskSubmitted): void {
     task.submittedAt = event.block.timestamp;
     task.submissionHash = event.params.submissionHash;
 
-    // Update metadata link to submission content using txHash-CID format
+    // Update metadata link to submission content using taskId-CID format
     let submissionCid = bytes32ToCid(event.params.submissionHash);
-    task.metadata = event.transaction.hash.toHexString() + "-" + submissionCid;
+    task.metadata = id + "-" + submissionCid;
 
     task.save();
 
     // Create IPFS data source to fetch and parse submission metadata
-    createTaskMetadataSource(event.params.submissionHash, id, event.block.timestamp, event.transaction.hash);
+    createTaskMetadataSource(event.params.submissionHash, id, event.block.timestamp);
   }
 }
 
@@ -372,17 +379,17 @@ export function handleTaskUpdated(event: TaskUpdated): void {
     task.metadataHash = event.params.metadataHash;
     task.updatedAt = event.block.timestamp;
 
-    // Update metadata link if changed - uses txHash-CID as entity ID
+    // Update metadata link if changed - uses taskId-CID as entity ID
     if (metadataChanged) {
       let metadataCid = bytes32ToCid(event.params.metadataHash);
-      task.metadata = event.transaction.hash.toHexString() + "-" + metadataCid;
+      task.metadata = id + "-" + metadataCid;
     }
 
     task.save();
 
     // Re-fetch metadata from IPFS if it changed
     if (metadataChanged) {
-      createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp, event.transaction.hash);
+      createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp);
     }
   }
 }
@@ -692,15 +699,15 @@ export function handleTaskRejected(event: TaskRejected): void {
   // handleTaskSubmitted overwrites task.metadata to point at submission content;
   // on rejection we need to point it back to the task description metadata.
   let originalCid = bytes32ToCid(task.metadataHash);
-  task.metadata = event.transaction.hash.toHexString() + "-" + originalCid;
+  task.metadata = taskEntityId + "-" + originalCid;
 
   task.save();
 
   // Re-fetch original task description metadata from IPFS so the restored link resolves
-  createTaskMetadataSource(task.metadataHash, taskEntityId, event.block.timestamp, event.transaction.hash);
+  createTaskMetadataSource(task.metadataHash, taskEntityId, event.block.timestamp);
 
   // Create IPFS data source to fetch and parse rejection metadata
-  createTaskMetadataSource(event.params.rejectionHash, taskEntityId, event.block.timestamp, event.transaction.hash);
+  createTaskMetadataSource(event.params.rejectionHash, taskEntityId, event.block.timestamp);
 
   // Create rejection record
   let rejectionId = event.transaction.hash.concatI32(event.logIndex.toI32());
@@ -710,9 +717,10 @@ export function handleTaskRejected(event: TaskRejected): void {
   rejection.rejectorUsername = getUsernameForAddress(event.params.rejector);
   rejection.rejectionHash = event.params.rejectionHash;
 
-  // Link to rejection metadata entity (will be created by IPFS data source)
+  // Link to rejection metadata entity (will be created by IPFS data source).
+  // Scoped by taskId-CID to match the TaskMetadata entity the IPFS handler creates.
   let rejectionCid = bytes32ToCid(event.params.rejectionHash);
-  rejection.metadata = event.transaction.hash.toHexString() + "-" + rejectionCid;
+  rejection.metadata = taskEntityId + "-" + rejectionCid;
   rejection.rejectedAt = event.block.timestamp;
   rejection.rejectedAtBlock = event.block.number;
   rejection.transactionHash = event.transaction.hash;

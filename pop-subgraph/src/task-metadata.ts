@@ -4,19 +4,26 @@ import { TaskMetadata } from "../generated/schema";
 /**
  * Handler for IPFS file data source that parses task metadata JSON.
  *
- * Creates a mutable TaskMetadata entity keyed by txHash-CID for uniqueness.
+ * Creates a mutable TaskMetadata entity keyed by taskId-CID for uniqueness.
  * Uses "load or create" pattern which is safe for mutable entities and
  * handles retries gracefully without triggering duplicate key constraint violations.
+ *
+ * The ID MUST be scoped by taskId (not tx hash): when several tasks are created
+ * in one batch transaction they share a tx hash, and identical task metadata
+ * (e.g. same title) yields an identical CID. A txHash-CID key would then collide
+ * across those tasks, producing two file data sources that write the same entity
+ * id in the same block — which graph-node rejects with
+ * "can not append operations that go backwards". taskId is globally unique
+ * (taskManager-taskId), so taskId-CID is collision-free.
  */
 export function handleTaskMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
   let context = dataSource.context();
   let taskId = context.getString("taskId");
   let timestamp = context.getBigInt("timestamp");
-  let txHash = context.getBytes("txHash");
 
-  // Entity ID includes tx hash for uniqueness
-  let entityId = txHash.toHexString() + "-" + ipfsCid;
+  // Entity ID is scoped by the (globally unique) task id for uniqueness
+  let entityId = taskId + "-" + ipfsCid;
 
   // Load or create metadata entity (mutable entity - safe to update)
   let metadata = TaskMetadata.load(entityId);
