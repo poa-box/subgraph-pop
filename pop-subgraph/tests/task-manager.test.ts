@@ -37,7 +37,7 @@ import {
   createOrganizerHatAllowedEvent,
   createRolePermSetEvent
 } from "./task-manager-utils";
-import { Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
+import { Task, Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
 /**
  * Helper function to create necessary entities for task manager tests.
@@ -286,6 +286,72 @@ describe("TaskManager", () => {
     assert.fieldEquals("Task", expectedTaskId, "requiresApplication", "true");
     // Verify task links to composite project ID
     assert.fieldEquals("Task", expectedTaskId, "project", expectedProjectId);
+  });
+
+  test("Batch-created tasks with identical metadata get distinct, task-scoped metadata links", () => {
+    // Regression test for the graph-node indexing error:
+    //   "can not append operations that go backwards from Insert { TaskMetadata[...] }"
+    // Tasks created in ONE batch transaction share a tx hash, and tasks with
+    // identical metadata (e.g. the same title) produce an identical IPFS CID.
+    // The old txHash-CID entity id collided across those tasks, spawning two file
+    // data sources that wrote the same TaskMetadata id in the same block. The id
+    // is now scoped by taskId (taskManager-taskId), so the links must differ.
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    let projectEvent = createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    );
+    handleProjectCreated(projectEvent);
+
+    // Same title + same metadata hash => same CID. createTaskCreatedEvent reuses
+    // newMockEvent()'s default transaction hash, so both share a tx hash (batch).
+    let sharedTitle = Bytes.fromHexString("0x48656c70206d6f7665"); // "Help move"
+    let sharedMetadataHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+    );
+    let bountyToken = Address.fromString("0x0000000000000000000000000000000000000001");
+
+    let event2 = createTaskCreatedEvent(
+      BigInt.fromI32(2), projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, sharedTitle, sharedMetadataHash
+    );
+    handleTaskCreated(event2);
+
+    let event3 = createTaskCreatedEvent(
+      BigInt.fromI32(3), projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, sharedTitle, sharedMetadataHash
+    );
+    handleTaskCreated(event3);
+
+    assert.entityCount("Task", 2);
+
+    let id2 = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-2";
+    let id3 = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-3";
+    let task2 = Task.load(id2);
+    let task3 = Task.load(id3);
+    assert.assertTrue(task2 != null);
+    assert.assertTrue(task3 != null);
+
+    let meta2 = task2!.metadata;
+    let meta3 = task3!.metadata;
+    assert.assertTrue(meta2 != null);
+    assert.assertTrue(meta3 != null);
+
+    // Core guard: identical-metadata batch tasks must NOT share a TaskMetadata id.
+    assert.assertTrue(meta2 != meta3);
+
+    // Each link is scoped by its own task id and shares the same CID suffix.
+    let cid2 = meta2!.substring((id2 + "-").length);
+    let cid3 = meta3!.substring((id3 + "-").length);
+    assert.assertTrue(cid2 == cid3);
+    assert.fieldEquals("Task", id2, "metadata", id2 + "-" + cid2);
+    assert.fieldEquals("Task", id3, "metadata", id3 + "-" + cid2);
   });
 
   test("Task assigned updates status", () => {

@@ -359,7 +359,7 @@ Task metadata fetched from IPFS.
 Contains task description, difficulty, estimated hours, and submission content.
 """
 type TaskMetadata @entity(immutable: false) {
-  id: String! # txHash-ipfsCid (e.g. 0xabc...-Qm...)
+  id: String! # taskId-ipfsCid, i.e. taskManager-taskId-CID (e.g. 0xTaskManager...-2-Qm...). Scoped by taskId (not tx hash) so batch-created tasks with identical metadata don't collide.
   task: Task # Link back to the task
   name: String # Task name from IPFS JSON
   description: String # Task description from IPFS JSON
