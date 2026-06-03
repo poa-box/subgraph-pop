@@ -1,26 +1,35 @@
-import { BigDecimal, BigInt, Bytes, dataSource, json, JSONValueKind } from "@graphprotocol/graph-ts";
+import { BigDecimal, Bytes, dataSource, json, JSONValueKind } from "@graphprotocol/graph-ts";
 import { TaskMetadata } from "../generated/schema";
 
 /**
  * Handler for IPFS file data source that parses task metadata JSON.
  *
- * Creates a mutable TaskMetadata entity keyed by taskId-CID for uniqueness.
- * Uses "load or create" pattern which is safe for mutable entities and
- * handles retries gracefully without triggering duplicate key constraint violations.
+ * The entity ID is `taskId-CID` where taskId is the globally-unique task entity id
+ * (taskManager-taskId, so it is org-scoped — on-chain task ids repeat across orgs).
+ * This must hold for two independent reasons, both of which otherwise crash the
+ * indexer because file data sources run in isolated causality regions:
  *
- * The ID MUST be scoped by taskId (not tx hash): when several tasks are created
- * in one batch transaction they share a tx hash, and identical task metadata
- * (e.g. same title) yields an identical CID. A txHash-CID key would then collide
- * across those tasks, producing two file data sources that write the same entity
- * id in the same block — which graph-node rejects with
- * "can not append operations that go backwards". taskId is globally unique
- * (taskManager-taskId), so taskId-CID is collision-free.
+ *   1. Cross-task: batch-created tasks share a tx hash, and identical metadata
+ *      (e.g. same title) yields the same CID. A txHash-CID key would collide
+ *      across those tasks ("can not append operations that go backwards").
+ *
+ *   2. Same task, different blocks: when a task re-references the same metadata
+ *      later (e.g. TaskRejected restoring the original description), the indexer
+ *      runs the file data source again. graph-node deduplicates file data sources
+ *      by (template, CID, context), so the context MUST be identical across those
+ *      references for the duplicate to be dropped. We therefore pass ONLY taskId
+ *      (no per-block timestamp) — a timestamp in the context defeated dedup and
+ *      produced two Inserts of the same id ("impossible combination of entity
+ *      operations"). This mirrors the ProposalMetadata pattern.
+ *
+ * `indexedAt` is intentionally not populated (kept nullable for backward compat):
+ * a per-block timestamp cannot live in the context without breaking dedup, and the
+ * task's own createdAt/updatedAt already carry that information.
  */
 export function handleTaskMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
   let context = dataSource.context();
   let taskId = context.getString("taskId");
-  let timestamp = context.getBigInt("timestamp");
 
   // Entity ID is scoped by the (globally unique) task id for uniqueness
   let entityId = taskId + "-" + ipfsCid;
@@ -30,7 +39,6 @@ export function handleTaskMetadata(content: Bytes): void {
   if (metadata == null) {
     metadata = new TaskMetadata(entityId);
     metadata.task = taskId;
-    metadata.indexedAt = timestamp;
   }
 
   // Try to parse the JSON content

@@ -368,7 +368,7 @@ type TaskMetadata @entity(immutable: false) {
   estimatedHours: BigDecimal # Estimated hours to complete (can be fractional, e.g. 0.5)
   submission: String # Submission content from IPFS JSON (for submission metadata)
   rejection: String # Rejection reason from IPFS JSON (for rejection metadata)
-  indexedAt: BigInt # When this metadata was indexed
+  indexedAt: BigInt # Deprecated: no longer populated. A per-block timestamp can't live in the file-data-source context without breaking dedup; use Task.createdAt/updatedAt instead.
 }
 
 type TaskApplication @entity(immutable: false) {

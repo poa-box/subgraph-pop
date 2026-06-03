@@ -75,18 +75,29 @@ function bytes32ToCid(hash: Bytes): string {
 /**
  * Helper function to create an IPFS file data source for task metadata.
  *
- * Uses DataSourceContext to pass taskId and timestamp to the handler so it can
- * link the metadata back to the task and record when it was indexed.
+ * `taskId` here is the globally-unique task entity id (taskManager-taskId), so it
+ * is org-scoped — on-chain task ids repeat across orgs, the TaskManager address
+ * disambiguates. The TaskMetadata entity id is `taskId-CID` for two reasons:
  *
- * The TaskMetadata entity id is scoped by taskId (taskManager-taskId), NOT by tx
- * hash. Batch task creation emits several TaskCreated events in one transaction
- * (one tx hash); tasks with identical metadata (e.g. same title) produce the same
- * CID. A txHash-CID id would collide across those tasks, spawning two file data
- * sources that write the same entity id in the same block — which graph-node
- * rejects ("can not append operations that go backwards"). taskId is unique per
- * task, so taskId-CID never collides. Keep this in sync with task-metadata.ts.
+ *   1. Cross-task: batch task creation emits several TaskCreated events in one tx
+ *      (one tx hash); tasks with identical metadata produce the same CID. A
+ *      txHash-CID id collided across those tasks, writing the same entity id in
+ *      one block ("can not append operations that go backwards").
+ *
+ *   2. Same task, later block: a task can re-reference the same metadata in a
+ *      later tx (e.g. TaskRejected restoring the original description), which runs
+ *      this file data source again. graph-node dedupes file data sources by
+ *      (template, CID, context), so the context MUST be identical across those
+ *      references. We therefore pass ONLY taskId — no per-block timestamp. A
+ *      timestamp here defeated dedup and produced two Inserts of the same id
+ *      ("impossible combination of entity operations").
+ *
+ * The TaskMetadata.load guard below only sees writes from this (onchain) causality
+ * region, never the file data source's, so it does not prevent the duplicate — the
+ * graph-node host dedup above is what does. It is kept as a cheap same-region
+ * safety net. Keep this in sync with task-metadata.ts.
  */
-function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp: BigInt): void {
+function createTaskMetadataSource(metadataHash: Bytes, taskId: string): void {
   // Skip if metadataHash is empty (all zeros)
   let zeroHash = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
   if (metadataHash.equals(zeroHash)) {
@@ -99,16 +110,16 @@ function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp
   // Entity ID is scoped by the (globally unique) task id for uniqueness
   let entityId = taskId + "-" + ipfsCid;
 
-  // Skip if TaskMetadata already exists (from previous blocks)
+  // Same-region safety net (see note above); cross-block dedup is handled by graph-node
   let existingMetadata = TaskMetadata.load(entityId);
   if (existingMetadata != null) {
     return;
   }
 
-  // Create context to pass taskId and timestamp to the IPFS handler
+  // Context carries ONLY taskId so repeated references to the same (task, CID)
+  // dedupe to a single file data source — do NOT add per-block fields here.
   let context = new DataSourceContext();
   context.setString("taskId", taskId);
-  context.setBigInt("timestamp", timestamp);
 
   // Create the file data source with context
   TaskMetadataTemplate.createWithContext(ipfsCid, context);
@@ -221,7 +232,7 @@ export function handleTaskCreated(event: TaskCreated): void {
   task.save();
 
   // Create IPFS data source to fetch and index task metadata
-  createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp);
+  createTaskMetadataSource(event.params.metadataHash, id);
 }
 
 export function handleTaskAssigned(event: TaskAssigned): void {
@@ -286,7 +297,7 @@ export function handleTaskSubmitted(event: TaskSubmitted): void {
     task.save();
 
     // Create IPFS data source to fetch and parse submission metadata
-    createTaskMetadataSource(event.params.submissionHash, id, event.block.timestamp);
+    createTaskMetadataSource(event.params.submissionHash, id);
   }
 }
 
@@ -389,7 +400,7 @@ export function handleTaskUpdated(event: TaskUpdated): void {
 
     // Re-fetch metadata from IPFS if it changed
     if (metadataChanged) {
-      createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp);
+      createTaskMetadataSource(event.params.metadataHash, id);
     }
   }
 }
@@ -703,11 +714,12 @@ export function handleTaskRejected(event: TaskRejected): void {
 
   task.save();
 
-  // Re-fetch original task description metadata from IPFS so the restored link resolves
-  createTaskMetadataSource(task.metadataHash, taskEntityId, event.block.timestamp);
+  // Re-fetch original task description metadata from IPFS so the restored link resolves.
+  // Same (task, CID) as creation -> graph-node dedupes this to the existing file data source.
+  createTaskMetadataSource(task.metadataHash, taskEntityId);
 
   // Create IPFS data source to fetch and parse rejection metadata
-  createTaskMetadataSource(event.params.rejectionHash, taskEntityId, event.block.timestamp);
+  createTaskMetadataSource(event.params.rejectionHash, taskEntityId);
 
   // Create rejection record
   let rejectionId = event.transaction.hash.concatI32(event.logIndex.toI32());

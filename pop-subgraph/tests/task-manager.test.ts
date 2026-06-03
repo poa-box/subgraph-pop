@@ -354,6 +354,72 @@ describe("TaskManager", () => {
     assert.fieldEquals("Task", id3, "metadata", id3 + "-" + cid2);
   });
 
+  test("Same task re-referencing identical metadata across txs keeps a stable link", () => {
+    // Regression test for the second graph-node indexing error:
+    //   "impossible combination of entity operations: Insert { TaskMetadata[...] }
+    //    and then Insert { ... }"
+    // A task can re-reference the SAME metadata in a LATER tx/block (TaskRejected
+    // restores the original description). The file data source then runs again;
+    // graph-node dedupes file data sources by (template, CID, context), so the
+    // context carries ONLY taskId (no per-block timestamp) and the metadata link id
+    // is identical to the one set at creation, regardless of tx/block. With the old
+    // txHash-CID id the restored link differed, producing a duplicate insert.
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    let projectEvent = createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    );
+    handleProjectCreated(projectEvent);
+
+    let taskId = BigInt.fromI32(0);
+    let title = Bytes.fromHexString("0x4164646578656373"); // "Addexecs"
+    let metadataHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+    );
+    let bountyToken = Address.fromString("0x0000000000000000000000000000000000000001");
+
+    // Create the task in tx 0xaa...
+    let createEvent = createTaskCreatedEvent(
+      taskId, projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, title, metadataHash
+    );
+    createEvent.transaction.hash = Bytes.fromHexString(
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    handleTaskCreated(createEvent);
+
+    let entityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-0";
+    let taskAfterCreate = Task.load(entityId);
+    assert.assertTrue(taskAfterCreate != null);
+    let linkAfterCreate = taskAfterCreate!.metadata;
+    assert.assertTrue(linkAfterCreate != null);
+    // Link is task-scoped (starts with the task entity id), never tx-scoped.
+    assert.assertTrue(linkAfterCreate!.substring(0, (entityId + "-").length) == entityId + "-");
+
+    // Reject in a DIFFERENT tx 0xbb... -> restores task.metadata to the original
+    // description metadata (re-referencing the same CID at a later block).
+    let rejector = Address.fromString("0x0000000000000000000000000000000000000003");
+    let rejectionHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000feedface"
+    );
+    let rejectEvent = createTaskRejectedEvent(taskId, rejector, rejectionHash);
+    rejectEvent.transaction.hash = Bytes.fromHexString(
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+    rejectEvent.logIndex = BigInt.fromI32(1);
+    handleTaskRejected(rejectEvent);
+
+    // Restored link must be byte-identical to the creation link: stable across txs.
+    // (Old txHash-CID id would differ here, since the two events have different hashes.)
+    assert.fieldEquals("Task", entityId, "metadata", linkAfterCreate!);
+  });
+
   test("Task assigned updates status", () => {
     // Setup Organization and TaskManager entities first
     setupTaskManagerEntities();
