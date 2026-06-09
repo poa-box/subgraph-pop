@@ -60,6 +60,7 @@ function createTestUser(userAddress: Address): void {
   user.totalVotes = BigInt.fromI32(0);
   user.totalTasksCompleted = BigInt.fromI32(0);
   user.totalTasksCancelled = BigInt.fromI32(0);
+  user.totalTasksLostToExpiry = BigInt.fromI32(0);
   user.totalModulesCompleted = BigInt.fromI32(0);
   user.totalClaimsAmount = BigInt.fromI32(0);
   user.totalPaymentsAmount = BigInt.fromI32(0);

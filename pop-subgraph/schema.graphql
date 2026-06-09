@@ -66,6 +66,8 @@ type User @entity(immutable: false) {
   cancelledTasks: [Task!]! @derivedFrom(field: "cancellerUser")
   taskApplications: [TaskApplication!]! @derivedFrom(field: "applicantUser")
   approvedApplications: [TaskApplication!]! @derivedFrom(field: "approverUser")
+  taskClaimsLost: [TaskClaimExpiry!]! @derivedFrom(field: "previousClaimerUser")
+  taskClaimsTakenOver: [TaskClaimExpiry!]! @derivedFrom(field: "newClaimerUser")
   hybridVotes: [Vote!]! @derivedFrom(field: "voterUser")
   ddvVotes: [DDVVote!]! @derivedFrom(field: "voterUser")
   hybridProposalsCreated: [Proposal!]! @derivedFrom(field: "creatorUser")
@@ -88,6 +90,7 @@ type User @entity(immutable: false) {
   totalVotes: BigInt!
   totalTasksCompleted: BigInt!
   totalTasksCancelled: BigInt!
+  totalTasksLostToExpiry: BigInt!
   totalModulesCompleted: BigInt!
   totalClaimsAmount: BigInt!
   totalPaymentsAmount: BigInt!
@@ -350,8 +353,14 @@ type Task @entity(immutable: false) {
   updatedAt: BigInt
   rejectionHash: Bytes # latest rejection metadata hash
   rejectionCount: Int!
+  # ---- Deadlines (TaskManager v6) ----
+  completionWindow: BigInt # per-claim submission window in seconds; null = unset (0 on-chain)
+  absoluteDeadline: BigInt # unix seconds cutoff; null = unset (0 on-chain)
+  claimDeadline: BigInt # current claim's deadline (unix seconds), recomputed per claim/assign/approve/reject; null = none
+  reclaimCount: Int! # number of expired-claim takeovers (TaskClaimExpired events)
   applications: [TaskApplication!]! @derivedFrom(field: "task")
   rejections: [TaskRejection!]! @derivedFrom(field: "task")
+  claimExpiries: [TaskClaimExpiry!]! @derivedFrom(field: "task")
 }
 
 """
@@ -368,6 +377,7 @@ type TaskMetadata @entity(immutable: false) {
   estimatedHours: BigDecimal # Estimated hours to complete (can be fractional, e.g. 0.5)
   submission: String # Submission content from IPFS JSON (for submission metadata)
   rejection: String # Rejection reason from IPFS JSON (for rejection metadata)
+  dueDate: BigInt # Soft due date (unix seconds) from IPFS JSON; display-only, never enforced on-chain
   indexedAt: BigInt # Deprecated: no longer populated. A per-block timestamp can't live in the file-data-source context without breaking dedup; use Task.createdAt/updatedAt instead.
 }
 
@@ -409,6 +419,25 @@ type TaskRejection @entity(immutable: true) {
   metadata: TaskMetadata # Link to rejection metadata from IPFS (contains rejection reason)
   rejectedAt: BigInt!
   rejectedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Immutable record of an expired claim being taken over (TaskManager v6).
+Emitted before the TaskClaimed/TaskAssigned/TaskApplicationApproved event that
+hands the task to the new claimer in the same transaction.
+"""
+type TaskClaimExpiry @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  task: Task!
+  previousClaimer: Bytes!
+  previousClaimerUsername: String
+  previousClaimerUser: User
+  newClaimer: Bytes!
+  newClaimerUsername: String
+  newClaimerUser: User
+  expiredAt: BigInt!
+  expiredAtBlock: BigInt!
   transactionHash: Bytes!
 }
 
