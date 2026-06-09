@@ -9,12 +9,16 @@ import {
   BountyCapSet,
   TaskCreated,
   TaskAssigned,
+  TaskClaimed,
   TaskSubmitted,
   TaskCompleted,
   TaskRejected,
   FoldersUpdated,
   OrganizerHatAllowed,
-  RolePermSet
+  RolePermSet,
+  TaskDeadlinesSet,
+  TaskClaimDeadlineSet,
+  TaskClaimExpired
 } from "../generated/templates/TaskManager/TaskManager";
 
 export function createProjectCreatedEvent(
@@ -297,6 +301,93 @@ export function createRolePermSetEvent(
   );
   event.parameters.push(
     new ethereum.EventParam("mask", ethereum.Value.fromI32(mask))
+  );
+
+  return event;
+}
+
+export function createTaskClaimedEvent(id: BigInt, claimer: Address): TaskClaimed {
+  let event = changetype<TaskClaimed>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("claimer", ethereum.Value.fromAddress(claimer))
+  );
+
+  return event;
+}
+
+// TaskManager v6: deadline events. uint48/uint32 params codegen to BigInt
+// (same as QuorumSet's uint32), so the mocks use fromUnsignedBigInt.
+export function createTaskDeadlinesSetEvent(
+  id: BigInt,
+  absoluteDeadline: BigInt,
+  completionWindow: BigInt
+): TaskDeadlinesSet {
+  let event = changetype<TaskDeadlinesSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id))
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "absoluteDeadline",
+      ethereum.Value.fromUnsignedBigInt(absoluteDeadline)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "completionWindow",
+      ethereum.Value.fromUnsignedBigInt(completionWindow)
+    )
+  );
+
+  return event;
+}
+
+export function createTaskClaimDeadlineSetEvent(
+  id: BigInt,
+  claimDeadline: BigInt
+): TaskClaimDeadlineSet {
+  let event = changetype<TaskClaimDeadlineSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id))
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "claimDeadline",
+      ethereum.Value.fromUnsignedBigInt(claimDeadline)
+    )
+  );
+
+  return event;
+}
+
+export function createTaskClaimExpiredEvent(
+  id: BigInt,
+  previousClaimer: Address,
+  newClaimer: Address
+): TaskClaimExpired {
+  let event = changetype<TaskClaimExpired>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id))
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "previousClaimer",
+      ethereum.Value.fromAddress(previousClaimer)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam("newClaimer", ethereum.Value.fromAddress(newClaimer))
   );
 
   return event;

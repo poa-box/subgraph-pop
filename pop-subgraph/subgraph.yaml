@@ -6,11 +6,11 @@ schema:
 dataSources:
   - kind: ethereum
     name: GovernanceFactory
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: GovernanceFactory
-      address: "0x7B023B9566b96616D54935AE8De80579c93f62aC"
-      startBlock: 45408008
+      address: "0x24Fd3b269905AF10A6E5c67D93F0502Cd11Af875"
+      startBlock: 447059876
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -27,11 +27,11 @@ dataSources:
       file: ./src/governance-factory.ts
   - kind: ethereum
     name: PoaManager
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PoaManager
-      address: "0x794fD39e75140ee1545B1B022E5486B7c863789b"
-      startBlock: 45407962
+      address: "0xFF585Fae4A944cD173B19158C6FC5E08980b0815"
+      startBlock: 447059849
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -58,11 +58,11 @@ dataSources:
       file: ./src/poa-manager.ts
   - kind: ethereum
     name: PoaManagerHub
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PoaManagerHub
-      address: "0x0000000000000000000000000000000000000000"
-      startBlock: 45407962
+      address: "0xB72840B343654eAfb2CFf7acC4Fc6b59E6c3CC71"
+      startBlock: 447060030
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -92,11 +92,11 @@ dataSources:
       file: ./src/poa-manager-hub.ts
   - kind: ethereum
     name: PoaManagerSatellite
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PoaManagerSatellite
-      address: "0x4Ad70029a9247D369a5bEA92f90840B9ee58eD06"
-      startBlock: 45408030
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 447059849
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -121,11 +121,11 @@ dataSources:
       file: ./src/poa-manager-satellite.ts
   - kind: ethereum
     name: Hats
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: Hats
       address: "0x3bc1A0Ad72417f2d411118085256fC53CBdDd137"
-      startBlock: 45407962
+      startBlock: 447059849
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -152,7 +152,7 @@ dataSources:
 templates:
   - kind: ethereum
     name: OrgDeployer
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: OrgDeployer
     mapping:
@@ -177,7 +177,7 @@ templates:
       file: ./src/org-deployer.ts
   - kind: ethereum
     name: OrgRegistry
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: OrgRegistry
     mapping:
@@ -208,7 +208,7 @@ templates:
       file: ./src/org-registry.ts
   - kind: ethereum
     name: PaymasterHub
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PaymasterHub
     mapping:
@@ -282,7 +282,7 @@ templates:
       file: ./src/paymaster-hub.ts
   - kind: ethereum
     name: UniversalAccountRegistry
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: UniversalAccountRegistry
     mapping:
@@ -320,7 +320,7 @@ templates:
       file: ./src/universal-account-registry.ts
   - kind: ethereum
     name: TaskManager
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: TaskManager
     mapping:
@@ -332,6 +332,7 @@ templates:
         - Task
         - TaskApplication
         - TaskRejection
+        - TaskClaimExpiry
         - ProjectManager
         - ProjectRolePermission
         - ProjectBountyCap
@@ -384,10 +385,16 @@ templates:
           handler: handleTaskApplicationApproved
         - event: TaskRejected(indexed uint256,indexed address,bytes32)
           handler: handleTaskRejected
+        - event: TaskDeadlinesSet(indexed uint256,uint48,uint32)
+          handler: handleTaskDeadlinesSet
+        - event: TaskClaimDeadlineSet(indexed uint256,uint48)
+          handler: handleTaskClaimDeadlineSet
+        - event: TaskClaimExpired(indexed uint256,indexed address,indexed address)
+          handler: handleTaskClaimExpired
       file: ./src/task-manager.ts
   - kind: ethereum
     name: HybridVoting
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: HybridVoting
     mapping:
@@ -439,7 +446,7 @@ templates:
       file: ./src/hybrid-voting.ts
   - kind: ethereum
     name: DirectDemocracyVoting
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: DirectDemocracyVoting
     mapping:
@@ -491,7 +498,7 @@ templates:
       file: ./src/direct-democracy-voting.ts
   - kind: ethereum
     name: EligibilityModule
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: EligibilityModule
     mapping:
@@ -562,7 +569,7 @@ templates:
       file: ./src/eligibility-module.ts
   - kind: ethereum
     name: ParticipationToken
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: ParticipationToken
     mapping:
@@ -604,7 +611,7 @@ templates:
       file: ./src/participation-token.ts
   - kind: ethereum
     name: QuickJoin
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: QuickJoin
     mapping:
@@ -652,7 +659,7 @@ templates:
       file: ./src/quick-join.ts
   - kind: ethereum
     name: EducationHub
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: EducationHub
     mapping:
@@ -703,7 +710,7 @@ templates:
       file: ./src/education-hub.ts
   - kind: ethereum
     name: PaymentManager
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PaymentManager
     mapping:
@@ -742,7 +749,7 @@ templates:
       file: ./src/payment-manager.ts
   - kind: ethereum
     name: Executor
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: Executor
     mapping:
@@ -792,7 +799,7 @@ templates:
       file: ./src/executor.ts
   - kind: ethereum
     name: ToggleModule
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: ToggleModule
     mapping:
@@ -818,7 +825,7 @@ templates:
       file: ./src/toggle-module.ts
   - kind: ethereum
     name: PasskeyAccountFactory
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PasskeyAccountFactory
     mapping:
@@ -843,7 +850,7 @@ templates:
       file: ./src/passkey-account-factory.ts
   - kind: ethereum
     name: PasskeyAccount
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: PasskeyAccount
     mapping:
@@ -884,7 +891,7 @@ templates:
       file: ./src/passkey-account.ts
   - kind: ethereum
     name: SwitchableBeacon
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: SwitchableBeacon
     mapping:
@@ -912,7 +919,7 @@ templates:
       file: ./src/switchable-beacon.ts
   - kind: file/ipfs
     name: OrgMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -926,7 +933,7 @@ templates:
           file: ./abis/OrgRegistry.json
   - kind: file/ipfs
     name: HatMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -939,7 +946,7 @@ templates:
           file: ./abis/EligibilityModule.json
   - kind: file/ipfs
     name: TaskMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -952,7 +959,7 @@ templates:
           file: ./abis/TaskManager.json
   - kind: file/ipfs
     name: ProjectMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -965,7 +972,7 @@ templates:
           file: ./abis/TaskManager.json
   - kind: file/ipfs
     name: ProposalMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -978,7 +985,7 @@ templates:
           file: ./abis/HybridVoting.json
   - kind: file/ipfs
     name: EducationModuleMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -991,7 +998,7 @@ templates:
           file: ./abis/EducationHub.json
   - kind: file/ipfs
     name: TokenRequestMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -1004,7 +1011,7 @@ templates:
           file: ./abis/ParticipationToken.json
   - kind: file/ipfs
     name: TaskApplicationMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
@@ -1017,7 +1024,7 @@ templates:
           file: ./abis/TaskManager.json
   - kind: file/ipfs
     name: AccountMetadata
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript

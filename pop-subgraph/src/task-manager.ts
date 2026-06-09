@@ -19,7 +19,10 @@ import {
   TaskRejected,
   FoldersUpdated,
   OrganizerHatAllowed,
-  RolePermSet
+  RolePermSet,
+  TaskDeadlinesSet,
+  TaskClaimDeadlineSet,
+  TaskClaimExpired
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
@@ -37,7 +40,8 @@ import {
   TaskMetadata,
   TaskApplicationMetadata,
   ProjectMetadata,
-  TaskRejection
+  TaskRejection,
+  TaskClaimExpiry
 } from "../generated/schema";
 import { getUsernameForAddress, loadExistingUser } from "./utils";
 
@@ -222,6 +226,7 @@ export function handleTaskCreated(event: TaskCreated): void {
   task.metadataHash = event.params.metadataHash;
   task.status = "Open";
   task.rejectionCount = 0;
+  task.reclaimCount = 0; // deadline fields stay null until TaskDeadlinesSet (v6)
   task.createdAt = event.block.timestamp;
   task.createdAtBlock = event.block.number;
 
@@ -242,6 +247,9 @@ export function handleTaskAssigned(event: TaskAssigned): void {
 
   let task = Task.load(id);
   if (task) {
+    // Clear any previous holder's link first — a v6 takeover may hand the task to a
+    // non-member (loadExistingUser -> null), which must not leave the old derived link.
+    task.assigneeUser = null;
     // Get organization from TaskManager
     let taskManager = TaskManager.load(event.address);
     if (taskManager) {
@@ -271,6 +279,23 @@ export function handleTaskClaimed(event: TaskClaimed): void {
 
   let task = Task.load(id);
   if (task) {
+    // Clear any previous holder's link first (v6 takeover-safe), then link the new
+    // claimer like handleTaskAssigned does — this was previously missing here, leaving
+    // User.assignedTasks stale for claim-path tasks.
+    task.assigneeUser = null;
+    let taskManager = TaskManager.load(event.address);
+    if (taskManager) {
+      let user = loadExistingUser(
+        taskManager.organization,
+        event.params.claimer,
+        event.block.timestamp,
+        event.block.number
+      );
+      if (user) {
+        task.assigneeUser = user.id;
+      }
+    }
+
     task.assignee = event.params.claimer;
     task.assigneeUsername = getUsernameForAddress(event.params.claimer);
     task.status = "Assigned";
@@ -492,6 +517,8 @@ export function handleTaskApplicationApproved(event: TaskApplicationApproved): v
   let taskEntityId = taskManagerAddress + "-" + taskId;
   let task = Task.load(taskEntityId);
   if (task) {
+    // Clear any previous holder's link first (v6 takeover-safe).
+    task.assigneeUser = null;
     let taskManager = TaskManager.load(event.address);
     if (taskManager) {
       let assigneeUser = loadExistingUser(
@@ -867,4 +894,105 @@ export function handleRolePermSet(event: RolePermSet): void {
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
   perm.save();
+}
+
+/**
+ * Handles TaskDeadlinesSet (TaskManager v6) — emitted at createTask/createTasksBatch/
+ * createAndAssignTask when either deadline knob is non-zero, and at updateTask whenever
+ * either value changes. 0 is the contract's "unset" sentinel; normalize to null so
+ * frontends can filter with `_not: null`. Emitted AFTER TaskCreated in the same tx
+ * (log order), so the Task always exists.
+ */
+export function handleTaskDeadlinesSet(event: TaskDeadlinesSet): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  let zero = BigInt.fromI32(0);
+  if (event.params.absoluteDeadline.equals(zero)) {
+    task.absoluteDeadline = null;
+  } else {
+    task.absoluteDeadline = event.params.absoluteDeadline;
+  }
+  if (event.params.completionWindow.equals(zero)) {
+    task.completionWindow = null;
+  } else {
+    task.completionWindow = event.params.completionWindow;
+  }
+  // Deliberately do not touch updatedAt — that field tracks TaskUpdated/TaskRejected.
+  task.save();
+}
+
+/**
+ * Handles TaskClaimDeadlineSet (TaskManager v6) — emitted when the current claim's
+ * deadline changes: claim/assign/approve start (claimTime + completionWindow),
+ * reject reset, window-edit adjustment, or clear (0). Only writer of
+ * Task.claimDeadline besides the defensive clear in handleTaskClaimExpired.
+ */
+export function handleTaskClaimDeadlineSet(event: TaskClaimDeadlineSet): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  if (event.params.claimDeadline.equals(BigInt.fromI32(0))) {
+    task.claimDeadline = null;
+  } else {
+    task.claimDeadline = event.params.claimDeadline;
+  }
+  task.save();
+}
+
+/**
+ * Handles TaskClaimExpired (TaskManager v6) — emitted when an expired claim is taken
+ * over, BEFORE the TaskClaimed/TaskAssigned/TaskApplicationApproved event in the same
+ * tx (graph-node processes same-block events in log order, so this runs first). Does
+ * NOT switch assignee/status/assignedAt — the follow-up claim handler does that. It
+ * records the takeover, increments reclaimCount, and defensively clears claimDeadline
+ * (re-set by the TaskClaimDeadlineSet that follows when the new claim has a window).
+ */
+export function handleTaskClaimExpired(event: TaskClaimExpired): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  task.reclaimCount = task.reclaimCount + 1;
+  task.claimDeadline = null;
+  task.save();
+
+  let expiryId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let expiry = new TaskClaimExpiry(expiryId);
+  expiry.task = taskEntityId;
+  expiry.previousClaimer = event.params.previousClaimer;
+  expiry.previousClaimerUsername = getUsernameForAddress(event.params.previousClaimer);
+  expiry.newClaimer = event.params.newClaimer;
+  expiry.newClaimerUsername = getUsernameForAddress(event.params.newClaimer);
+  expiry.expiredAt = event.block.timestamp;
+  expiry.expiredAtBlock = event.block.number;
+  expiry.transactionHash = event.transaction.hash;
+
+  let taskManager = TaskManager.load(event.address);
+  if (taskManager) {
+    let prevUser = loadExistingUser(
+      taskManager.organization,
+      event.params.previousClaimer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (prevUser) {
+      expiry.previousClaimerUser = prevUser.id;
+      prevUser.totalTasksLostToExpiry = prevUser.totalTasksLostToExpiry.plus(BigInt.fromI32(1));
+      prevUser.save();
+    }
+    let newUser = loadExistingUser(
+      taskManager.organization,
+      event.params.newClaimer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (newUser) {
+      expiry.newClaimerUser = newUser.id;
+    }
+  }
+
+  expiry.save();
 }
