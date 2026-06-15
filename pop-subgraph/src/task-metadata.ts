@@ -1,4 +1,4 @@
-import { BigDecimal, Bytes, dataSource, json, JSONValueKind } from "@graphprotocol/graph-ts";
+import { BigDecimal, BigInt, Bytes, dataSource, json, JSONValueKind } from "@graphprotocol/graph-ts";
 import { TaskMetadata } from "../generated/schema";
 
 /**
@@ -99,6 +99,19 @@ export function handleTaskMetadata(content: Bytes): void {
   let rejectionValue = jsonObject.get("rejectionReason");
   if (rejectionValue != null && !rejectionValue.isNull() && rejectionValue.kind == JSONValueKind.STRING) {
     metadata.rejection = rejectionValue.toString();
+  }
+
+  // Parse optional soft due date (unix seconds, written by the frontend; v6).
+  // Display-only — never enforced on-chain. Tolerates absence and wrong types;
+  // fractional values are truncated (same pattern as proposal-metadata timestamps).
+  let dueDateValue = jsonObject.get("dueDate");
+  if (dueDateValue != null && !dueDateValue.isNull() && dueDateValue.kind == JSONValueKind.NUMBER) {
+    let raw = dueDateValue.toF64().toString();
+    let dotIndex = raw.indexOf(".");
+    if (dotIndex >= 0) {
+      raw = raw.substring(0, dotIndex);
+    }
+    metadata.dueDate = BigInt.fromString(raw);
   }
 
   metadata.save();

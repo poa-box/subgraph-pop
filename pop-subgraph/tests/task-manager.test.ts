@@ -20,7 +20,11 @@ import {
   handleTaskRejected,
   handleFoldersUpdated,
   handleOrganizerHatAllowed,
-  handleRolePermSet
+  handleRolePermSet,
+  handleTaskClaimed,
+  handleTaskDeadlinesSet,
+  handleTaskClaimDeadlineSet,
+  handleTaskClaimExpired
 } from "../src/task-manager";
 import {
   createProjectCreatedEvent,
@@ -35,9 +39,13 @@ import {
   createTaskRejectedEvent,
   createFoldersUpdatedEvent,
   createOrganizerHatAllowedEvent,
-  createRolePermSetEvent
+  createRolePermSetEvent,
+  createTaskClaimedEvent,
+  createTaskDeadlinesSetEvent,
+  createTaskClaimDeadlineSetEvent,
+  createTaskClaimExpiredEvent
 } from "./task-manager-utils";
-import { Task, Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
+import { Task, Organization, TaskManager, User, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
 /**
  * Helper function to create necessary entities for task manager tests.
@@ -189,6 +197,68 @@ function setupTaskManagerEntities(): void {
   educationHub.save();
   paymentManager.save();
   organization.save();
+}
+
+
+// ───────────────────────── TaskManager v6: deadlines & takeover ─────────────────────────
+// Module-scope (NOT inside describe): AssemblyScript test closures cannot capture
+// outer locals — nested helpers in the describe callback wasm-trap at runtime.
+
+// Mock event address default → task entity id prefix.
+const TM_ADDR = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+function setupDeadlineTask(taskId: BigInt): string {
+  setupTaskManagerEntities();
+  let projectId = Bytes.fromHexString(
+    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+  );
+  handleProjectCreated(
+    createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    )
+  );
+  handleTaskCreated(
+    createTaskCreatedEvent(
+      taskId,
+      projectId,
+      BigInt.fromI32(100),
+      Address.zero(),
+      BigInt.fromI32(0),
+      false,
+      Bytes.fromHexString("0x1234")
+    )
+  );
+  return TM_ADDR + "-" + taskId.toString();
+}
+
+function createDeadlineTestUser(userAddress: Address): void {
+  let orgId = Bytes.fromHexString(
+    "0x1111111111111111111111111111111111111111111111111111111111111111"
+  );
+  let userId = orgId.toHexString() + "-" + userAddress.toHexString();
+  let user = new User(userId);
+  user.organization = orgId;
+  user.address = userAddress;
+  user.participationTokenBalance = BigInt.fromI32(0);
+  user.totalVotes = BigInt.fromI32(0);
+  user.totalTasksCompleted = BigInt.fromI32(0);
+  user.totalTasksCancelled = BigInt.fromI32(0);
+  user.totalTasksLostToExpiry = BigInt.fromI32(0);
+  user.totalModulesCompleted = BigInt.fromI32(0);
+  user.totalClaimsAmount = BigInt.fromI32(0);
+  user.totalPaymentsAmount = BigInt.fromI32(0);
+  user.totalTokenRequestsAmount = BigInt.fromI32(0);
+  user.firstSeenAt = BigInt.fromI32(1000);
+  user.firstSeenAtBlock = BigInt.fromI32(100);
+  user.lastActiveAt = BigInt.fromI32(1000);
+  user.lastActiveAtBlock = BigInt.fromI32(100);
+  user.currentHatIds = [];
+  user.membershipStatus = "Active";
+  user.joinMethod = "QuickJoin";
+  user.save();
 }
 
 describe("TaskManager", () => {
@@ -1346,5 +1416,157 @@ describe("TaskManager", () => {
     assert.entityCount("GlobalRolePermission", 1); // not deleted
     assert.fieldEquals("GlobalRolePermission", id, "mask", "0");
     assert.fieldEquals("GlobalRolePermission", id, "canBudget", "false");
+  });
+
+
+  test("TaskCreated initializes reclaimCount and null deadlines", () => {
+    let entityId = setupDeadlineTask(BigInt.fromI32(1));
+    assert.fieldEquals("Task", entityId, "reclaimCount", "0");
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.completionWindow === null);
+    assert.assertTrue(task.absoluteDeadline === null);
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("TaskDeadlinesSet stores values and normalizes zeros to null", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(taskId, BigInt.fromI32(1900000000), BigInt.fromI32(604800))
+    );
+    assert.fieldEquals("Task", entityId, "absoluteDeadline", "1900000000");
+    assert.fieldEquals("Task", entityId, "completionWindow", "604800");
+
+    // updateTask clearing both knobs emits zeros → normalized back to null
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(taskId, BigInt.fromI32(0), BigInt.fromI32(0))
+    );
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.absoluteDeadline === null);
+    assert.assertTrue(task.completionWindow === null);
+  });
+
+  test("TaskDeadlinesSet on a non-existent task is a no-op", () => {
+    setupTaskManagerEntities();
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(BigInt.fromI32(99), BigInt.fromI32(1900000000), BigInt.fromI32(60))
+    );
+    assert.entityCount("Task", 0);
+  });
+
+  test("TaskClaimDeadlineSet stores the deadline and zero clears to null", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(1900000123)));
+    assert.fieldEquals("Task", entityId, "claimDeadline", "1900000123");
+
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(0)));
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("TaskClaimExpired creates a TaskClaimExpiry, increments reclaimCount, clears claimDeadline", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(1900000123)));
+
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(7);
+    handleTaskClaimExpired(expiredEvent);
+
+    assert.entityCount("TaskClaimExpiry", 1);
+    let expiryId = expiredEvent.transaction.hash.concatI32(7).toHexString();
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "previousClaimer", alice.toHexString());
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "newClaimer", bob.toHexString());
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "task", entityId);
+    assert.fieldEquals("Task", entityId, "reclaimCount", "1");
+    // Defensive clear — the follow-up TaskClaimDeadlineSet re-sets it when a window exists.
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("Takeover flow switches assignee and restarts the claim deadline", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+
+    // Alice claims; window deadline t1.
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(2000)));
+    assert.fieldEquals("Task", entityId, "assignee", alice.toHexString());
+
+    // Expiry + Bob takes over (contract emits these in this order in one tx).
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(1);
+    handleTaskClaimExpired(expiredEvent);
+    handleTaskClaimed(createTaskClaimedEvent(taskId, bob));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(3000)));
+
+    assert.fieldEquals("Task", entityId, "assignee", bob.toHexString());
+    assert.fieldEquals("Task", entityId, "status", "Assigned");
+    assert.fieldEquals("Task", entityId, "claimDeadline", "3000");
+    assert.fieldEquals("Task", entityId, "reclaimCount", "1");
+    assert.entityCount("TaskClaimExpiry", 1);
+  });
+
+  test("TaskClaimed links assigneeUser and clears the previous link on takeover", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let nonMember = Address.fromString("0x00000000000000000000000000000000000de4d1");
+    createDeadlineTestUser(alice);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    assert.fieldEquals("Task", entityId, "assigneeUser", aliceUserId);
+
+    // Takeover by a NON-member: the stale link must be cleared, not left pointing at Alice.
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, nonMember);
+    expiredEvent.logIndex = BigInt.fromI32(2);
+    handleTaskClaimExpired(expiredEvent);
+    handleTaskClaimed(createTaskClaimedEvent(taskId, nonMember));
+
+    assert.fieldEquals("Task", entityId, "assignee", nonMember.toHexString());
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.assigneeUser === null);
+  });
+
+  test("TaskClaimExpired increments the previous claimer's totalTasksLostToExpiry", () => {
+    let taskId = BigInt.fromI32(1);
+    setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+    createDeadlineTestUser(alice);
+    createDeadlineTestUser(bob);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+    let expiryId: string;
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(3);
+    handleTaskClaimExpired(expiredEvent);
+
+    assert.fieldEquals("User", aliceUserId, "totalTasksLostToExpiry", "1");
+    expiryId = expiredEvent.transaction.hash.concatI32(3).toHexString();
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "previousClaimerUser", aliceUserId);
+    assert.fieldEquals(
+      "TaskClaimExpiry",
+      expiryId,
+      "newClaimerUser",
+      orgId.toHexString() + "-" + bob.toHexString()
+    );
   });
 });

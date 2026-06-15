@@ -291,6 +291,16 @@
         "name": "requiresApplication",
         "type": "bool",
         "internalType": "bool"
+      },
+      {
+        "name": "absoluteDeadline",
+        "type": "uint48",
+        "internalType": "uint48"
+      },
+      {
+        "name": "completionWindow",
+        "type": "uint32",
+        "internalType": "uint32"
       }
     ],
     "outputs": [
@@ -411,6 +421,16 @@
         "name": "requiresApplication",
         "type": "bool",
         "internalType": "bool"
+      },
+      {
+        "name": "absoluteDeadline",
+        "type": "uint48",
+        "internalType": "uint48"
+      },
+      {
+        "name": "completionWindow",
+        "type": "uint32",
+        "internalType": "uint32"
       }
     ],
     "outputs": [],
@@ -459,6 +479,16 @@
             "name": "requiresApplication",
             "type": "bool",
             "internalType": "bool"
+          },
+          {
+            "name": "absoluteDeadline",
+            "type": "uint48",
+            "internalType": "uint48"
+          },
+          {
+            "name": "completionWindow",
+            "type": "uint32",
+            "internalType": "uint32"
           }
         ]
       }
@@ -670,6 +700,16 @@
         "name": "newBountyPayout",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "newAbsoluteDeadline",
+        "type": "uint48",
+        "internalType": "uint48"
+      },
+      {
+        "name": "newCompletionWindow",
+        "type": "uint32",
+        "internalType": "uint32"
       }
     ],
     "outputs": [],
@@ -1077,6 +1117,50 @@
   },
   {
     "type": "event",
+    "name": "TaskClaimDeadlineSet",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "claimDeadline",
+        "type": "uint48",
+        "indexed": false,
+        "internalType": "uint48"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TaskClaimExpired",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "previousClaimer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newClaimer",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "TaskClaimed",
     "inputs": [
       {
@@ -1164,6 +1248,31 @@
         "type": "bytes32",
         "indexed": false,
         "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TaskDeadlinesSet",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "absoluteDeadline",
+        "type": "uint48",
+        "indexed": false,
+        "internalType": "uint48"
+      },
+      {
+        "name": "completionWindow",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
       }
     ],
     "anonymous": false
@@ -1305,6 +1414,11 @@
         "internalType": "bytes32"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidDeadline",
+    "inputs": []
   },
   {
     "type": "error",
