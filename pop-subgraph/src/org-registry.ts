@@ -352,10 +352,10 @@ function wireZkEmailInvites(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: Co
   module.organization = org.id;
   // executor is the org's Executor (the hat minter) — read from the org entity, no eth_call.
   module.executor = org.executorContract !== null ? changetype<Bytes>(org.executorContract) : ZERO_ADDRESS;
-  // verifier/dkimRegistry/accountRegistry/universalFactory are left unset (nullable): initialize()
-  // emits them, but those events fire before this template exists (registration happens after init),
-  // so they are not backfilled. The Verifier/DKIM/AccountRegistry/UniversalFactory Updated handlers
-  // populate them on any post-deploy change. No eth_calls — see the contracts CLAUDE.md event guidance.
+  // verifier/dkimRegistry/accountRegistry/universalFactory are left unset here: the contracts register
+  // the module BEFORE initializing it, so the Verifier/DKIM/AccountRegistry/UniversalFactory Updated
+  // events initialize() emits fire just after this ContractRegistered (same tx) and the handlers
+  // populate these fields then. No eth_calls — see the contracts CLAUDE.md event guidance.
 
   module.createdAt = event.block.timestamp;
   module.createdAtBlock = event.block.number;
