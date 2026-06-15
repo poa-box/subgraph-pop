@@ -207,6 +207,49 @@ templates:
           handler: handleHatsTreeRegistered
       file: ./src/org-registry.ts
   - kind: ethereum
+    name: ZkEmailInvites
+    network: arbitrum-one
+    source:
+      abi: ZkEmailInvites
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - ZkEmailInvitesContract
+        - ZkEmailDomainRule
+        - ZkEmailEmailRule
+        - ZkEmailRoleClaim
+      abis:
+        - name: ZkEmailInvites
+          file: ./abis/ZkEmailInvites.json
+      eventHandlers:
+        - event: DomainRuleSet(indexed bytes32,uint256[],uint64)
+          handler: handleDomainRuleSet
+        - event: DomainRuleRemoved(indexed bytes32)
+          handler: handleDomainRuleRemoved
+        - event: EmailRuleSet(indexed bytes32,uint256[],uint64)
+          handler: handleEmailRuleSet
+        - event: EmailRuleRemoved(indexed bytes32)
+          handler: handleEmailRuleRemoved
+        - event: RoleClaimedByDomain(indexed address,indexed bytes32,uint256[],bytes32)
+          handler: handleRoleClaimedByDomain
+        - event: RoleClaimedByEmail(indexed address,indexed bytes32,uint256[],bytes32)
+          handler: handleRoleClaimedByEmail
+        - event: RegisteredAndClaimedByDomain(indexed address,indexed bytes32,string,indexed bytes32,uint256[])
+          handler: handleRegisteredAndClaimedByDomain
+        - event: RegisteredAndClaimedByEmail(indexed address,indexed bytes32,string,indexed bytes32,uint256[])
+          handler: handleRegisteredAndClaimedByEmail
+        - event: VerifierUpdated(indexed address)
+          handler: handleVerifierUpdated
+        - event: DKIMRegistryUpdated(indexed address)
+          handler: handleDKIMRegistryUpdated
+        - event: AccountRegistryUpdated(indexed address)
+          handler: handleAccountRegistryUpdated
+        - event: UniversalFactoryUpdated(indexed address)
+          handler: handleUniversalFactoryUpdated
+      file: ./src/zk-email-invites.ts
+  - kind: ethereum
     name: PaymasterHub
     network: arbitrum-one
     source:

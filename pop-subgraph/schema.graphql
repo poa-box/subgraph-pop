@@ -12,6 +12,7 @@ type Organization @entity(immutable: false) {
   paymentManager: PaymentManagerContract
   eligibilityModule: EligibilityModuleContract
   toggleModuleContract: ToggleModuleContract
+  zkEmailInvites: ZkEmailInvitesContract # optional ZK Email role-invite module
   # Deployment data - nullable until OrgDeployed event
   topHatId: BigInt
   roleHatIds: [BigInt!]
@@ -39,6 +40,93 @@ type Organization @entity(immutable: false) {
   foldersUpdatedAt: BigInt
   foldersUpdatedBy: Bytes # _msgSender() from FoldersUpdated (smart-wallet-aware)
   folderRootChanges: [FolderRootChange!]! @derivedFrom(field: "organization")
+}
+
+# ========================================
+# ZkEmailInvites - on-chain ZK Email role-invite module (optional, per-org)
+# ========================================
+# NOTE: rules baked in at initialize() (deploy-time ZkEmailConfig) are emitted BEFORE this module's
+# data-source template exists, so they are not backfilled here — the contract is the source of truth
+# for current rules. This subgraph indexes rule CHANGES (setDomainRule/setEmailRule/remove*) and all
+# role CLAIMS from registration onward, plus the module's live verifier/DKIM/registry config.
+
+type ZkEmailInvitesContract @entity(immutable: false) {
+  id: Bytes! # proxy address
+  organization: Organization!
+  verifier: Bytes! # IVerifier (seeded from the contract at registration)
+  dkimRegistry: Bytes! # IDKIMRegistry
+  accountRegistry: Bytes! # UniversalAccountRegistry (passkey register-and-claim)
+  universalFactory: Bytes! # PasskeyAccountFactory (may be zero until late-bound)
+  executor: Bytes! # org Executor (the hat minter)
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  lastUpdatedAt: BigInt
+  transactionHash: Bytes!
+  domainRules: [ZkEmailDomainRule!]! @derivedFrom(field: "zkEmailInvites")
+  emailRules: [ZkEmailEmailRule!]! @derivedFrom(field: "zkEmailInvites")
+  claims: [ZkEmailRoleClaim!]! @derivedFrom(field: "zkEmailInvites")
+}
+
+# Domain allowlist rule: any email proven to come from `domainHash` grants `hatIds`.
+type ZkEmailDomainRule @entity(immutable: false) {
+  id: String! # zkEmailInvites-domainHash
+  zkEmailInvites: ZkEmailInvitesContract!
+  organization: Organization!
+  domainHash: Bytes! # keccak256(lower(domain))
+  hatIds: [BigInt!]!
+  expiry: BigInt! # unix seconds; 0 = no expiry
+  active: Boolean! # false once removed
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  updatedAt: BigInt
+  updatedAtBlock: BigInt
+  removedAt: BigInt
+  removedAtBlock: BigInt
+  transactionHash: Bytes!
+}
+
+# Specific-email allowlist rule keyed by accountSalt = Poseidon(email, accountCode).
+type ZkEmailEmailRule @entity(immutable: false) {
+  id: String! # zkEmailInvites-accountSalt
+  zkEmailInvites: ZkEmailInvitesContract!
+  organization: Organization!
+  accountSalt: Bytes!
+  hatIds: [BigInt!]!
+  expiry: BigInt!
+  active: Boolean!
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  updatedAt: BigInt
+  updatedAtBlock: BigInt
+  removedAt: BigInt
+  removedAtBlock: BigInt
+  transactionHash: Bytes!
+}
+
+enum ZkEmailClaimKind {
+  Domain
+  Email
+}
+
+# A role claimed via a verified ZK email proof (bare claim or passkey register-and-claim).
+type ZkEmailRoleClaim @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  zkEmailInvites: ZkEmailInvitesContract!
+  organization: Organization!
+  claimer: Bytes! # address the hats were minted to
+  claimerUser: User # linked org User if one exists
+  claimerUsername: String
+  kind: ZkEmailClaimKind!
+  domainHash: Bytes # set when kind = Domain
+  accountSalt: Bytes # set when kind = Email
+  hatIds: [BigInt!]!
+  nullifier: Bytes # email nullifier; set for bare claims, null for register-and-claim
+  viaPasskeyRegistration: Boolean! # true for registerAndClaim* (a passkey account was created)
+  username: String # set when viaPasskeyRegistration
+  credentialId: Bytes # set when viaPasskeyRegistration
+  claimedAt: BigInt!
+  claimedAtBlock: BigInt!
+  transactionHash: Bytes!
 }
 
 # ========================================

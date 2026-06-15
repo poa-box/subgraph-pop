@@ -14,11 +14,14 @@ import {
   RegisteredContract,
   SwitchableBeaconContract,
   EducationHubContract,
-  ParticipationTokenContract
+  ParticipationTokenContract,
+  ZkEmailInvitesContract
 } from "../generated/schema";
 import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templates";
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
+import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
+import { ZkEmailInvites as ZkEmailInvitesContractBinding } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
 import { getOrCreateRole } from "./utils";
 
 // 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
@@ -32,6 +35,13 @@ const ZERO_ADDRESS: Bytes = Bytes.fromHexString("0x00000000000000000000000000000
 // post-deployment registration path can only ever introduce an EducationHub today.
 const EDUCATION_HUB_TYPE_ID: Bytes = Bytes.fromHexString(
   "0xa871f070b566fe185ede7c7d071cb2f92e7c75c6a2912b6f37c86a50cdc6bad3"
+);
+
+// keccak256("ZkEmailInvites") — OrgRegistry typeId for the optional ZkEmailInvites module.
+// Unlike EducationHub, ZkEmailInvites is NOT carried in the OrgDeployed event, so it is wired
+// entirely from ContractRegistered (both at deploy time and post-deploy) via wireZkEmailInvites.
+const ZK_EMAIL_INVITES_TYPE_ID: Bytes = Bytes.fromHexString(
+  "0x77a52db12b54c70a33bdf184cac221a69b235b98cf754315952afcffd06ae4db"
 );
 
 /**
@@ -265,6 +275,9 @@ export function handleContractRegistered(event: ContractRegisteredEvent): void {
   // without this a post-hoc registration leaves Organization.educationHub pointing at the zero
   // entity and the module's events never index.
   wirePostDeployModule(orgId, typeId, proxy, event);
+  // ZkEmailInvites is not in OrgDeployed, so wire it directly from this registration event
+  // (deploy-time AND post-deploy), without the deployedAtBlock skip wirePostDeployModule uses.
+  wireZkEmailInvites(orgId, typeId, proxy, event);
 }
 
 /**
@@ -314,6 +327,59 @@ function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: 
     // Index the module's modules/completions/permission changes from this block forward.
     EducationHubTemplate.create(Address.fromBytes(proxy));
   }
+}
+
+/**
+ * Wire the optional ZkEmailInvites module from its ContractRegistered event. ZkEmailInvites is the
+ * only optional module NOT carried by OrgDeployed, so — unlike wirePostDeployModule — this does NOT
+ * skip when deployedAtBlock is null: the module's ContractRegistered fires during the deploy tx and
+ * is the only signal we get. Idempotent (skips if the proxy entity already exists). Config fields are
+ * seeded by reading the module's getters, since initialize() set them without emitting *Updated events.
+ */
+function wireZkEmailInvites(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: ContractRegisteredEvent): void {
+  if (!typeId.equals(ZK_EMAIL_INVITES_TYPE_ID)) {
+    return;
+  }
+  let org = Organization.load(orgId);
+  if (org == null) {
+    return; // OrgRegistered fires before module registrations; defensive guard
+  }
+  // Idempotent: a (orgId, typeId) pair can only be registered once, but guard anyway.
+  if (ZkEmailInvitesContract.load(proxy) != null) {
+    return;
+  }
+
+  let module = new ZkEmailInvitesContract(proxy);
+  module.organization = org.id;
+
+  // Seed live config by reading the proxy's getters (initialize() set them with no *Updated event).
+  let bound = ZkEmailInvitesContractBinding.bind(Address.fromBytes(proxy));
+  let v = bound.try_verifier();
+  module.verifier = v.reverted ? ZERO_ADDRESS : v.value;
+  let d = bound.try_dkimRegistry();
+  module.dkimRegistry = d.reverted ? ZERO_ADDRESS : d.value;
+  let a = bound.try_accountRegistry();
+  module.accountRegistry = a.reverted ? ZERO_ADDRESS : a.value;
+  let u = bound.try_universalFactory();
+  module.universalFactory = u.reverted ? ZERO_ADDRESS : u.value;
+  let e = bound.try_executor();
+  if (e.reverted) {
+    module.executor = org.executorContract !== null ? changetype<Bytes>(org.executorContract) : ZERO_ADDRESS;
+  } else {
+    module.executor = e.value;
+  }
+
+  module.createdAt = event.block.timestamp;
+  module.createdAtBlock = event.block.number;
+  module.transactionHash = event.transaction.hash;
+  module.save();
+
+  org.zkEmailInvites = proxy;
+  org.lastUpdatedAt = event.block.timestamp;
+  org.save();
+
+  // Index rule changes + claims from this block forward.
+  ZkEmailInvitesTemplate.create(Address.fromBytes(proxy));
 }
 
 /**
