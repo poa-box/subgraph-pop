@@ -21,7 +21,6 @@ import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templ
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
 import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
-import { ZkEmailInvites as ZkEmailInvitesContractBinding } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
 import { getOrCreateRole } from "./utils";
 
 // 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
@@ -351,23 +350,12 @@ function wireZkEmailInvites(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: Co
 
   let module = new ZkEmailInvitesContract(proxy);
   module.organization = org.id;
-
-  // Seed live config by reading the proxy's getters (initialize() set them with no *Updated event).
-  let bound = ZkEmailInvitesContractBinding.bind(Address.fromBytes(proxy));
-  let v = bound.try_verifier();
-  module.verifier = v.reverted ? ZERO_ADDRESS : v.value;
-  let d = bound.try_dkimRegistry();
-  module.dkimRegistry = d.reverted ? ZERO_ADDRESS : d.value;
-  let a = bound.try_accountRegistry();
-  module.accountRegistry = a.reverted ? ZERO_ADDRESS : a.value;
-  let u = bound.try_universalFactory();
-  module.universalFactory = u.reverted ? ZERO_ADDRESS : u.value;
-  let e = bound.try_executor();
-  if (e.reverted) {
-    module.executor = org.executorContract !== null ? changetype<Bytes>(org.executorContract) : ZERO_ADDRESS;
-  } else {
-    module.executor = e.value;
-  }
+  // executor is the org's Executor (the hat minter) — read from the org entity, no eth_call.
+  module.executor = org.executorContract !== null ? changetype<Bytes>(org.executorContract) : ZERO_ADDRESS;
+  // verifier/dkimRegistry/accountRegistry/universalFactory are left unset (nullable): initialize()
+  // emits them, but those events fire before this template exists (registration happens after init),
+  // so they are not backfilled. The Verifier/DKIM/AccountRegistry/UniversalFactory Updated handlers
+  // populate them on any post-deploy change. No eth_calls — see the contracts CLAUDE.md event guidance.
 
   module.createdAt = event.block.timestamp;
   module.createdAtBlock = event.block.number;

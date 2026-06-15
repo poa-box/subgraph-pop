@@ -4,7 +4,6 @@ import { handleContractRegistered } from "../src/org-registry";
 import { handleDomainRuleSet, handleDomainRuleRemoved, handleRoleClaimedByDomain } from "../src/zk-email-invites";
 import { createContractRegisteredEvent } from "./org-registry-utils";
 import {
-  mockZkGetters,
   createDomainRuleSetEvent,
   createDomainRuleRemovedEvent,
   createRoleClaimedByDomainEvent
@@ -61,7 +60,6 @@ describe("ZkEmailInvites", () => {
     // when deployedAtBlock is null (its ContractRegistered fires during the deploy tx).
     test("wires at deploy time even when deployedAtBlock is null", () => {
       makeOrg(ORG_ID, false);
-      mockZkGetters(PROXY, VERIFIER, DKIM, ACCT, FACTORY, EXECUTOR);
 
       let ev = createContractRegisteredEvent(CONTRACT_ID, ORG_ID, ZK_TYPE_ID, PROXY, BEACON, true, OWNER);
       handleContractRegistered(ev);
@@ -69,14 +67,12 @@ describe("ZkEmailInvites", () => {
       assert.fieldEquals("Organization", ORG_ID.toHexString(), "zkEmailInvites", PROXY.toHexString());
       assert.entityCount("ZkEmailInvitesContract", 1);
       assert.fieldEquals("ZkEmailInvitesContract", PROXY.toHexString(), "organization", ORG_ID.toHexString());
-      assert.fieldEquals("ZkEmailInvitesContract", PROXY.toHexString(), "verifier", VERIFIER.toHexString());
-      assert.fieldEquals("ZkEmailInvitesContract", PROXY.toHexString(), "dkimRegistry", DKIM.toHexString());
+      // executor comes from the org entity (no eth_call); verifier/dkim stay null until a post-deploy change.
       assert.fieldEquals("ZkEmailInvitesContract", PROXY.toHexString(), "executor", EXECUTOR.toHexString());
     });
 
     test("is idempotent — a second registration does not duplicate the module", () => {
       makeOrg(ORG_ID, true);
-      mockZkGetters(PROXY, VERIFIER, DKIM, ACCT, FACTORY, EXECUTOR);
 
       let ev = createContractRegisteredEvent(CONTRACT_ID, ORG_ID, ZK_TYPE_ID, PROXY, BEACON, true, OWNER);
       handleContractRegistered(ev);

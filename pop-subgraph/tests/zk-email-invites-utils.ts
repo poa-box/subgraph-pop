@@ -1,32 +1,10 @@
-import { newMockEvent, createMockedFunction } from "matchstick-as/assembly/index";
+import { newMockEvent } from "matchstick-as/assembly/index";
 import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import {
   DomainRuleSet,
   DomainRuleRemoved,
   RoleClaimedByDomain
 } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
-
-// Mock the five view getters wireZkEmailInvites reads at registration to seed the module's config.
-export function mockZkGetters(
-  proxy: Address,
-  verifier: Address,
-  dkim: Address,
-  accountRegistry: Address,
-  factory: Address,
-  executor: Address
-): void {
-  createMockedFunction(proxy, "verifier", "verifier():(address)").returns([ethereum.Value.fromAddress(verifier)]);
-  createMockedFunction(proxy, "dkimRegistry", "dkimRegistry():(address)").returns([
-    ethereum.Value.fromAddress(dkim)
-  ]);
-  createMockedFunction(proxy, "accountRegistry", "accountRegistry():(address)").returns([
-    ethereum.Value.fromAddress(accountRegistry)
-  ]);
-  createMockedFunction(proxy, "universalFactory", "universalFactory():(address)").returns([
-    ethereum.Value.fromAddress(factory)
-  ]);
-  createMockedFunction(proxy, "executor", "executor():(address)").returns([ethereum.Value.fromAddress(executor)]);
-}
 
 export function createDomainRuleSetEvent(
   module: Address,

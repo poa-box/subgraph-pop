@@ -45,19 +45,21 @@ type Organization @entity(immutable: false) {
 # ========================================
 # ZkEmailInvites - on-chain ZK Email role-invite module (optional, per-org)
 # ========================================
-# NOTE: rules baked in at initialize() (deploy-time ZkEmailConfig) are emitted BEFORE this module's
-# data-source template exists, so they are not backfilled here — the contract is the source of truth
-# for current rules. This subgraph indexes rule CHANGES (setDomainRule/setEmailRule/remove*) and all
-# role CLAIMS from registration onward, plus the module's live verifier/DKIM/registry config.
+# NOTE: config + rules set in initialize() (deploy-time wiring + ZkEmailConfig) are emitted BEFORE
+# this module's data-source template exists (registration fires after init), so they are not
+# backfilled — the contract is the source of truth for the initial verifier/DKIM/rules. We do NOT
+# eth_call to read them. This subgraph indexes, from registration onward: config CHANGES
+# (Verifier/DKIM/AccountRegistry/UniversalFactory Updated), rule CHANGES (setDomainRule/setEmailRule/
+# remove*), and all role CLAIMS. The verifier/dkimRegistry/etc. fields stay null until first changed.
 
 type ZkEmailInvitesContract @entity(immutable: false) {
   id: Bytes! # proxy address
   organization: Organization!
-  verifier: Bytes! # IVerifier (seeded from the contract at registration)
-  dkimRegistry: Bytes! # IDKIMRegistry
-  accountRegistry: Bytes! # UniversalAccountRegistry (passkey register-and-claim)
-  universalFactory: Bytes! # PasskeyAccountFactory (may be zero until late-bound)
-  executor: Bytes! # org Executor (the hat minter)
+  verifier: Bytes # IVerifier; set on any post-deploy VerifierUpdated (initialize emits predate the template)
+  dkimRegistry: Bytes # IDKIMRegistry; set on any post-deploy DKIMRegistryUpdated
+  accountRegistry: Bytes # UniversalAccountRegistry; set on any post-deploy AccountRegistryUpdated
+  universalFactory: Bytes # PasskeyAccountFactory; set on any post-deploy UniversalFactoryUpdated
+  executor: Bytes! # org Executor (the hat minter) — read from the org entity at registration
   createdAt: BigInt!
   createdAtBlock: BigInt!
   lastUpdatedAt: BigInt
