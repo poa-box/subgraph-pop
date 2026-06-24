@@ -702,6 +702,30 @@ templates:
           handler: handleUnpaused
       file: ./src/education-hub.ts
   - kind: ethereum
+    name: ZkEmailInvites
+    network: gnosis
+    source:
+      abi: ZkEmailInvites
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - ZkEmailInvites
+        - ZkEmailAllowlist
+        - ZkEmailAllowlistEntry
+      abis:
+        - name: ZkEmailInvites
+          file: ./abis/ZkEmailInvites.json
+      eventHandlers:
+        - event: ActiveAllowlistSet(indexed bytes32,indexed bytes32)
+          handler: handleActiveAllowlistSet
+        - event: RoleClaimedByDomain(indexed address,indexed bytes32,uint256[],bytes32)
+          handler: handleRoleClaimedByDomain
+        - event: RoleClaimedByEmail(indexed address,indexed bytes32,uint256[],bytes32)
+          handler: handleRoleClaimedByEmail
+      file: ./src/zk-email-invites.ts
+  - kind: ethereum
     name: PaymentManager
     network: gnosis
     source:
@@ -989,6 +1013,21 @@ templates:
       abis:
         - name: EducationHub
           file: ./abis/EducationHub.json
+  - kind: file/ipfs
+    name: ZkEmailAllowlist
+    network: gnosis
+    mapping:
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/zk-email-allowlist.ts
+      handler: handleZkEmailAllowlist
+      entities:
+        - ZkEmailAllowlist
+        - ZkEmailAllowlistEntry
+        - ZkEmailInvites
+      abis:
+        - name: ZkEmailInvites
+          file: ./abis/ZkEmailInvites.json
   - kind: file/ipfs
     name: TokenRequestMetadata
     network: gnosis
