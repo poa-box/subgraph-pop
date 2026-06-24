@@ -12,6 +12,7 @@ type Organization @entity(immutable: false) {
   paymentManager: PaymentManagerContract
   eligibilityModule: EligibilityModuleContract
   toggleModuleContract: ToggleModuleContract
+  zkEmailInvites: ZkEmailInvites
   # Deployment data - nullable until OrgDeployed event
   topHatId: BigInt
   roleHatIds: [BigInt!]
@@ -1131,6 +1132,51 @@ type EducationHubHatsChange @entity(immutable: true) {
   changedAt: BigInt!
   changedAtBlock: BigInt!
   transactionHash: Bytes!
+}
+
+# ========================================
+# ZkEmailInvites Contract and Related Entities
+# ========================================
+
+# Per-org ZkEmailInvites module (proxy, registered in OrgRegistry like EducationHub).
+# Holds the currently-active "allowed emails" allowlist: a JSON file on IPFS mapping whole
+# domains + specific emails -> role hat IDs, committed on-chain by a merkle root.
+type ZkEmailInvites @entity(immutable: false) {
+  id: Bytes! # proxy address
+  organization: Organization!
+  # Active allowlist merkle root committed on-chain (null/dormant when no allowlist is set).
+  activeRoot: Bytes
+  # CIDv0 of the active allowlist JSON on IPFS (derived from the bytes32 allowlistCid digest).
+  # Null when the allowlist is cleared (dormant).
+  activeAllowlistCid: String
+  # The indexed content of the active allowlist (may be null if IPFS is slow/unavailable).
+  activeAllowlist: ZkEmailAllowlist
+  createdAt: BigInt
+  lastUpdatedAt: BigInt
+}
+
+# IPFS-indexed content of a single allowlist commit, keyed by its CIDv0.
+type ZkEmailAllowlist @entity(immutable: false) {
+  id: String! # IPFS CIDv0 of the allowlist JSON
+  module: ZkEmailInvites!
+  # Merkle root declared inside the allowlist JSON (should match the on-chain commit).
+  root: Bytes
+  entries: [ZkEmailAllowlistEntry!]! @derivedFrom(field: "allowlist")
+  indexedAt: BigInt
+}
+
+# A single allowlist entry: either a whole domain or a specific email mapped to role hat IDs.
+type ZkEmailAllowlistEntry @entity(immutable: true) {
+  id: String! # cid-index
+  allowlist: ZkEmailAllowlist!
+  entryType: String! # "domain" or "email"
+  # The human-readable identifier ("anthropic.com" for a domain, "alice@org.com" for an email).
+  identifier: String
+  # For email entries, the keccak/poseidon emailHash committed in the JSON (null for domains).
+  identifierHash: Bytes
+  hatIds: [BigInt!]! # role hat IDs granted by this entry
+  roleIndexes: [Int!]! # role indexes parallel to hatIds
+  index: Int! # position in the entries[] array
 }
 
 # ========================================

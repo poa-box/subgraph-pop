@@ -14,11 +14,13 @@ import {
   RegisteredContract,
   SwitchableBeaconContract,
   EducationHubContract,
-  ParticipationTokenContract
+  ParticipationTokenContract,
+  ZkEmailInvites
 } from "../generated/schema";
 import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templates";
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
+import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
 import { getOrCreateRole } from "./utils";
 
 // 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
@@ -32,6 +34,13 @@ const ZERO_ADDRESS: Bytes = Bytes.fromHexString("0x00000000000000000000000000000
 // post-deployment registration path can only ever introduce an EducationHub today.
 const EDUCATION_HUB_TYPE_ID: Bytes = Bytes.fromHexString(
   "0xa871f070b566fe185ede7c7d071cb2f92e7c75c6a2912b6f37c86a50cdc6bad3"
+);
+
+// keccak256("ZkEmailInvites") — the OrgRegistry typeId for the per-org ZkEmailInvites module.
+// Mirrors ModuleTypes.ZKEMAIL_INVITES_ID in the contracts repo. Like EducationHub, this module
+// is registered via OrgRegistry.ContractRegistered, so it flows through wirePostDeployModule.
+const ZKEMAIL_INVITES_ID: Bytes = Bytes.fromHexString(
+  "0x77a52db12b54c70a33bdf184cac221a69b235b98cf754315952afcffd06ae4db"
 );
 
 /**
@@ -279,10 +288,38 @@ export function handleContractRegistered(event: ContractRegisteredEvent): void {
  */
 function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: ContractRegisteredEvent): void {
   let org = Organization.load(orgId);
+  if (org == null) {
+    return;
+  }
+
+  if (typeId.equals(ZKEMAIL_INVITES_ID)) {
+    // ZkEmailInvites is NOT one of the fixed modules carried by OrgDeployed, so this
+    // ContractRegistered is the ONLY place it can be wired — regardless of whether OrgDeployed has
+    // run yet (no deployedAtBlock guard). The proxy is registered BEFORE its initialize() runs (see
+    // ModulesFactory / the governance batch), so creating the data-source template here captures the
+    // init-time ActiveAllowlistSet that handleActiveAllowlistSet then indexes. No risk of a duplicate
+    // data source because OrgDeployed never spawns a ZkEmailInvites template.
+    let existing = ZkEmailInvites.load(proxy);
+    if (existing == null) {
+      let zk = new ZkEmailInvites(proxy);
+      zk.organization = org.id;
+      zk.createdAt = event.block.timestamp;
+      zk.lastUpdatedAt = event.block.timestamp;
+      zk.save();
+
+      org.zkEmailInvites = proxy;
+      org.lastUpdatedAt = event.block.timestamp;
+      org.save();
+
+      ZkEmailInvitesTemplate.create(Address.fromBytes(proxy));
+    }
+    return;
+  }
+
   // deployedAtBlock is null until handleOrgDeployed runs. Guarding on it makes this robust to the
   // event ordering inside the deployment tx: if ContractRegistered fires before OrgDeployed we skip
   // (OrgDeployed will wire the module + template), avoiding a duplicate dynamic data source.
-  if (org == null || org.deployedAtBlock === null) {
+  if (org.deployedAtBlock === null) {
     return;
   }
 
