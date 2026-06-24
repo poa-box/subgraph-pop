@@ -19,7 +19,10 @@ import {
   TaskRejected,
   FoldersUpdated,
   OrganizerHatAllowed,
-  RolePermSet
+  RolePermSet,
+  TaskDeadlinesSet,
+  TaskClaimDeadlineSet,
+  TaskClaimExpired
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
@@ -37,7 +40,8 @@ import {
   TaskMetadata,
   TaskApplicationMetadata,
   ProjectMetadata,
-  TaskRejection
+  TaskRejection,
+  TaskClaimExpiry
 } from "../generated/schema";
 import { getUsernameForAddress, loadExistingUser } from "./utils";
 
@@ -75,10 +79,29 @@ function bytes32ToCid(hash: Bytes): string {
 /**
  * Helper function to create an IPFS file data source for task metadata.
  *
- * Uses DataSourceContext to pass taskId and timestamp to the handler so it can
- * link the metadata back to the task and record when it was indexed.
+ * `taskId` here is the globally-unique task entity id (taskManager-taskId), so it
+ * is org-scoped — on-chain task ids repeat across orgs, the TaskManager address
+ * disambiguates. The TaskMetadata entity id is `taskId-CID` for two reasons:
+ *
+ *   1. Cross-task: batch task creation emits several TaskCreated events in one tx
+ *      (one tx hash); tasks with identical metadata produce the same CID. A
+ *      txHash-CID id collided across those tasks, writing the same entity id in
+ *      one block ("can not append operations that go backwards").
+ *
+ *   2. Same task, later block: a task can re-reference the same metadata in a
+ *      later tx (e.g. TaskRejected restoring the original description), which runs
+ *      this file data source again. graph-node dedupes file data sources by
+ *      (template, CID, context), so the context MUST be identical across those
+ *      references. We therefore pass ONLY taskId — no per-block timestamp. A
+ *      timestamp here defeated dedup and produced two Inserts of the same id
+ *      ("impossible combination of entity operations").
+ *
+ * The TaskMetadata.load guard below only sees writes from this (onchain) causality
+ * region, never the file data source's, so it does not prevent the duplicate — the
+ * graph-node host dedup above is what does. It is kept as a cheap same-region
+ * safety net. Keep this in sync with task-metadata.ts.
  */
-function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp: BigInt, txHash: Bytes): void {
+function createTaskMetadataSource(metadataHash: Bytes, taskId: string): void {
   // Skip if metadataHash is empty (all zeros)
   let zeroHash = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
   if (metadataHash.equals(zeroHash)) {
@@ -88,20 +111,19 @@ function createTaskMetadataSource(metadataHash: Bytes, taskId: string, timestamp
   // Convert bytes32 sha256 digest to IPFS CIDv0 string
   let ipfsCid = bytes32ToCid(metadataHash);
 
-  // Entity ID includes tx hash for uniqueness
-  let entityId = txHash.toHexString() + "-" + ipfsCid;
+  // Entity ID is scoped by the (globally unique) task id for uniqueness
+  let entityId = taskId + "-" + ipfsCid;
 
-  // Skip if TaskMetadata already exists (from previous blocks)
+  // Same-region safety net (see note above); cross-block dedup is handled by graph-node
   let existingMetadata = TaskMetadata.load(entityId);
   if (existingMetadata != null) {
     return;
   }
 
-  // Create context to pass taskId, timestamp, and txHash to the IPFS handler
+  // Context carries ONLY taskId so repeated references to the same (task, CID)
+  // dedupe to a single file data source — do NOT add per-block fields here.
   let context = new DataSourceContext();
   context.setString("taskId", taskId);
-  context.setBigInt("timestamp", timestamp);
-  context.setBytes("txHash", txHash);
 
   // Create the file data source with context
   TaskMetadataTemplate.createWithContext(ipfsCid, context);
@@ -204,17 +226,18 @@ export function handleTaskCreated(event: TaskCreated): void {
   task.metadataHash = event.params.metadataHash;
   task.status = "Open";
   task.rejectionCount = 0;
+  task.reclaimCount = 0; // deadline fields stay null until TaskDeadlinesSet (v6)
   task.createdAt = event.block.timestamp;
   task.createdAtBlock = event.block.number;
 
-  // Set metadata link using txHash-CID format for uniqueness
+  // Set metadata link using taskId-CID format for uniqueness
   let metadataCid = bytes32ToCid(event.params.metadataHash);
-  task.metadata = event.transaction.hash.toHexString() + "-" + metadataCid;
+  task.metadata = id + "-" + metadataCid;
 
   task.save();
 
   // Create IPFS data source to fetch and index task metadata
-  createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp, event.transaction.hash);
+  createTaskMetadataSource(event.params.metadataHash, id);
 }
 
 export function handleTaskAssigned(event: TaskAssigned): void {
@@ -224,6 +247,9 @@ export function handleTaskAssigned(event: TaskAssigned): void {
 
   let task = Task.load(id);
   if (task) {
+    // Clear any previous holder's link first — a v6 takeover may hand the task to a
+    // non-member (loadExistingUser -> null), which must not leave the old derived link.
+    task.assigneeUser = null;
     // Get organization from TaskManager
     let taskManager = TaskManager.load(event.address);
     if (taskManager) {
@@ -253,6 +279,23 @@ export function handleTaskClaimed(event: TaskClaimed): void {
 
   let task = Task.load(id);
   if (task) {
+    // Clear any previous holder's link first (v6 takeover-safe), then link the new
+    // claimer like handleTaskAssigned does — this was previously missing here, leaving
+    // User.assignedTasks stale for claim-path tasks.
+    task.assigneeUser = null;
+    let taskManager = TaskManager.load(event.address);
+    if (taskManager) {
+      let user = loadExistingUser(
+        taskManager.organization,
+        event.params.claimer,
+        event.block.timestamp,
+        event.block.number
+      );
+      if (user) {
+        task.assigneeUser = user.id;
+      }
+    }
+
     task.assignee = event.params.claimer;
     task.assigneeUsername = getUsernameForAddress(event.params.claimer);
     task.status = "Assigned";
@@ -272,14 +315,14 @@ export function handleTaskSubmitted(event: TaskSubmitted): void {
     task.submittedAt = event.block.timestamp;
     task.submissionHash = event.params.submissionHash;
 
-    // Update metadata link to submission content using txHash-CID format
+    // Update metadata link to submission content using taskId-CID format
     let submissionCid = bytes32ToCid(event.params.submissionHash);
-    task.metadata = event.transaction.hash.toHexString() + "-" + submissionCid;
+    task.metadata = id + "-" + submissionCid;
 
     task.save();
 
     // Create IPFS data source to fetch and parse submission metadata
-    createTaskMetadataSource(event.params.submissionHash, id, event.block.timestamp, event.transaction.hash);
+    createTaskMetadataSource(event.params.submissionHash, id);
   }
 }
 
@@ -372,17 +415,17 @@ export function handleTaskUpdated(event: TaskUpdated): void {
     task.metadataHash = event.params.metadataHash;
     task.updatedAt = event.block.timestamp;
 
-    // Update metadata link if changed - uses txHash-CID as entity ID
+    // Update metadata link if changed - uses taskId-CID as entity ID
     if (metadataChanged) {
       let metadataCid = bytes32ToCid(event.params.metadataHash);
-      task.metadata = event.transaction.hash.toHexString() + "-" + metadataCid;
+      task.metadata = id + "-" + metadataCid;
     }
 
     task.save();
 
     // Re-fetch metadata from IPFS if it changed
     if (metadataChanged) {
-      createTaskMetadataSource(event.params.metadataHash, id, event.block.timestamp, event.transaction.hash);
+      createTaskMetadataSource(event.params.metadataHash, id);
     }
   }
 }
@@ -474,6 +517,8 @@ export function handleTaskApplicationApproved(event: TaskApplicationApproved): v
   let taskEntityId = taskManagerAddress + "-" + taskId;
   let task = Task.load(taskEntityId);
   if (task) {
+    // Clear any previous holder's link first (v6 takeover-safe).
+    task.assigneeUser = null;
     let taskManager = TaskManager.load(event.address);
     if (taskManager) {
       let assigneeUser = loadExistingUser(
@@ -692,15 +737,16 @@ export function handleTaskRejected(event: TaskRejected): void {
   // handleTaskSubmitted overwrites task.metadata to point at submission content;
   // on rejection we need to point it back to the task description metadata.
   let originalCid = bytes32ToCid(task.metadataHash);
-  task.metadata = event.transaction.hash.toHexString() + "-" + originalCid;
+  task.metadata = taskEntityId + "-" + originalCid;
 
   task.save();
 
-  // Re-fetch original task description metadata from IPFS so the restored link resolves
-  createTaskMetadataSource(task.metadataHash, taskEntityId, event.block.timestamp, event.transaction.hash);
+  // Re-fetch original task description metadata from IPFS so the restored link resolves.
+  // Same (task, CID) as creation -> graph-node dedupes this to the existing file data source.
+  createTaskMetadataSource(task.metadataHash, taskEntityId);
 
   // Create IPFS data source to fetch and parse rejection metadata
-  createTaskMetadataSource(event.params.rejectionHash, taskEntityId, event.block.timestamp, event.transaction.hash);
+  createTaskMetadataSource(event.params.rejectionHash, taskEntityId);
 
   // Create rejection record
   let rejectionId = event.transaction.hash.concatI32(event.logIndex.toI32());
@@ -710,9 +756,10 @@ export function handleTaskRejected(event: TaskRejected): void {
   rejection.rejectorUsername = getUsernameForAddress(event.params.rejector);
   rejection.rejectionHash = event.params.rejectionHash;
 
-  // Link to rejection metadata entity (will be created by IPFS data source)
+  // Link to rejection metadata entity (will be created by IPFS data source).
+  // Scoped by taskId-CID to match the TaskMetadata entity the IPFS handler creates.
   let rejectionCid = bytes32ToCid(event.params.rejectionHash);
-  rejection.metadata = event.transaction.hash.toHexString() + "-" + rejectionCid;
+  rejection.metadata = taskEntityId + "-" + rejectionCid;
   rejection.rejectedAt = event.block.timestamp;
   rejection.rejectedAtBlock = event.block.number;
   rejection.transactionHash = event.transaction.hash;
@@ -847,4 +894,105 @@ export function handleRolePermSet(event: RolePermSet): void {
   perm.setAtBlock = event.block.number;
   perm.transactionHash = event.transaction.hash;
   perm.save();
+}
+
+/**
+ * Handles TaskDeadlinesSet (TaskManager v6) — emitted at createTask/createTasksBatch/
+ * createAndAssignTask when either deadline knob is non-zero, and at updateTask whenever
+ * either value changes. 0 is the contract's "unset" sentinel; normalize to null so
+ * frontends can filter with `_not: null`. Emitted AFTER TaskCreated in the same tx
+ * (log order), so the Task always exists.
+ */
+export function handleTaskDeadlinesSet(event: TaskDeadlinesSet): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  let zero = BigInt.fromI32(0);
+  if (event.params.absoluteDeadline.equals(zero)) {
+    task.absoluteDeadline = null;
+  } else {
+    task.absoluteDeadline = event.params.absoluteDeadline;
+  }
+  if (event.params.completionWindow.equals(zero)) {
+    task.completionWindow = null;
+  } else {
+    task.completionWindow = event.params.completionWindow;
+  }
+  // Deliberately do not touch updatedAt — that field tracks TaskUpdated/TaskRejected.
+  task.save();
+}
+
+/**
+ * Handles TaskClaimDeadlineSet (TaskManager v6) — emitted when the current claim's
+ * deadline changes: claim/assign/approve start (claimTime + completionWindow),
+ * reject reset, window-edit adjustment, or clear (0). Only writer of
+ * Task.claimDeadline besides the defensive clear in handleTaskClaimExpired.
+ */
+export function handleTaskClaimDeadlineSet(event: TaskClaimDeadlineSet): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  if (event.params.claimDeadline.equals(BigInt.fromI32(0))) {
+    task.claimDeadline = null;
+  } else {
+    task.claimDeadline = event.params.claimDeadline;
+  }
+  task.save();
+}
+
+/**
+ * Handles TaskClaimExpired (TaskManager v6) — emitted when an expired claim is taken
+ * over, BEFORE the TaskClaimed/TaskAssigned/TaskApplicationApproved event in the same
+ * tx (graph-node processes same-block events in log order, so this runs first). Does
+ * NOT switch assignee/status/assignedAt — the follow-up claim handler does that. It
+ * records the takeover, increments reclaimCount, and defensively clears claimDeadline
+ * (re-set by the TaskClaimDeadlineSet that follows when the new claim has a window).
+ */
+export function handleTaskClaimExpired(event: TaskClaimExpired): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  task.reclaimCount = task.reclaimCount + 1;
+  task.claimDeadline = null;
+  task.save();
+
+  let expiryId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let expiry = new TaskClaimExpiry(expiryId);
+  expiry.task = taskEntityId;
+  expiry.previousClaimer = event.params.previousClaimer;
+  expiry.previousClaimerUsername = getUsernameForAddress(event.params.previousClaimer);
+  expiry.newClaimer = event.params.newClaimer;
+  expiry.newClaimerUsername = getUsernameForAddress(event.params.newClaimer);
+  expiry.expiredAt = event.block.timestamp;
+  expiry.expiredAtBlock = event.block.number;
+  expiry.transactionHash = event.transaction.hash;
+
+  let taskManager = TaskManager.load(event.address);
+  if (taskManager) {
+    let prevUser = loadExistingUser(
+      taskManager.organization,
+      event.params.previousClaimer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (prevUser) {
+      expiry.previousClaimerUser = prevUser.id;
+      prevUser.totalTasksLostToExpiry = prevUser.totalTasksLostToExpiry.plus(BigInt.fromI32(1));
+      prevUser.save();
+    }
+    let newUser = loadExistingUser(
+      taskManager.organization,
+      event.params.newClaimer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (newUser) {
+      expiry.newClaimerUser = newUser.id;
+    }
+  }
+
+  expiry.save();
 }

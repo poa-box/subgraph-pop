@@ -1,4 +1,4 @@
-import { Bytes, dataSource, json, BigInt, JSONValueKind } from "@graphprotocol/graph-ts";
+import { Bytes, dataSource, json, BigInt, BigDecimal, JSONValueKind } from "@graphprotocol/graph-ts";
 import { OrgMetadata, OrgMetadataLink } from "../generated/schema";
 
 /**
@@ -13,6 +13,8 @@ import { OrgMetadata, OrgMetadataLink } from "../generated/schema";
  *   logo: "QmXxx...",         // optional IPFS CID
  *   hideTreasury: true/false  // optional, defaults to null (= show treasury)
  *   useTokenSymbol: false     // optional, defaults to null/false
+ *   taskPayoutHoursOnly: true // optional, defaults to null/false
+ *   taskPayoutHourlyRate: 10  // optional number (tokens/hour), can be fractional
  * }
  *
  * This handler is resilient to malformed data - if parsing fails or fields
@@ -96,6 +98,28 @@ export function handleOrgMetadata(content: Bytes): void {
       useTokenSymbolValue.kind == JSONValueKind.BOOL
     ) {
       metadata.useTokenSymbol = useTokenSymbolValue.toBool();
+    }
+
+    // Parse taskPayoutHoursOnly — when true, task payouts ignore difficulty and
+    // are computed as taskPayoutHourlyRate × hours. Optional; if missing/null
+    // the frontend treats it as false.
+    let taskPayoutHoursOnlyValue = jsonObject.get("taskPayoutHoursOnly");
+    if (
+      taskPayoutHoursOnlyValue != null && !taskPayoutHoursOnlyValue.isNull() &&
+      taskPayoutHoursOnlyValue.kind == JSONValueKind.BOOL
+    ) {
+      metadata.taskPayoutHoursOnly = taskPayoutHoursOnlyValue.toBool();
+    }
+
+    // Parse taskPayoutHourlyRate — tokens-per-hour used for hours-only payouts
+    // (supports fractional values like 12.5, mirroring task estHours). Optional;
+    // the frontend defaults to 10 when missing.
+    let taskPayoutHourlyRateValue = jsonObject.get("taskPayoutHourlyRate");
+    if (
+      taskPayoutHourlyRateValue != null && !taskPayoutHourlyRateValue.isNull() &&
+      taskPayoutHourlyRateValue.kind == JSONValueKind.NUMBER
+    ) {
+      metadata.taskPayoutHourlyRate = BigDecimal.fromString(taskPayoutHourlyRateValue.toF64().toString());
     }
 
     // Set indexed timestamp (approximate - file data sources don't have block context)

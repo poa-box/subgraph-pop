@@ -20,7 +20,11 @@ import {
   handleTaskRejected,
   handleFoldersUpdated,
   handleOrganizerHatAllowed,
-  handleRolePermSet
+  handleRolePermSet,
+  handleTaskClaimed,
+  handleTaskDeadlinesSet,
+  handleTaskClaimDeadlineSet,
+  handleTaskClaimExpired
 } from "../src/task-manager";
 import {
   createProjectCreatedEvent,
@@ -35,9 +39,13 @@ import {
   createTaskRejectedEvent,
   createFoldersUpdatedEvent,
   createOrganizerHatAllowedEvent,
-  createRolePermSetEvent
+  createRolePermSetEvent,
+  createTaskClaimedEvent,
+  createTaskDeadlinesSetEvent,
+  createTaskClaimDeadlineSetEvent,
+  createTaskClaimExpiredEvent
 } from "./task-manager-utils";
-import { Organization, TaskManager, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
+import { Task, Organization, TaskManager, User, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
 /**
  * Helper function to create necessary entities for task manager tests.
@@ -191,6 +199,68 @@ function setupTaskManagerEntities(): void {
   organization.save();
 }
 
+
+// ───────────────────────── TaskManager v6: deadlines & takeover ─────────────────────────
+// Module-scope (NOT inside describe): AssemblyScript test closures cannot capture
+// outer locals — nested helpers in the describe callback wasm-trap at runtime.
+
+// Mock event address default → task entity id prefix.
+const TM_ADDR = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+function setupDeadlineTask(taskId: BigInt): string {
+  setupTaskManagerEntities();
+  let projectId = Bytes.fromHexString(
+    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+  );
+  handleProjectCreated(
+    createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    )
+  );
+  handleTaskCreated(
+    createTaskCreatedEvent(
+      taskId,
+      projectId,
+      BigInt.fromI32(100),
+      Address.zero(),
+      BigInt.fromI32(0),
+      false,
+      Bytes.fromHexString("0x1234")
+    )
+  );
+  return TM_ADDR + "-" + taskId.toString();
+}
+
+function createDeadlineTestUser(userAddress: Address): void {
+  let orgId = Bytes.fromHexString(
+    "0x1111111111111111111111111111111111111111111111111111111111111111"
+  );
+  let userId = orgId.toHexString() + "-" + userAddress.toHexString();
+  let user = new User(userId);
+  user.organization = orgId;
+  user.address = userAddress;
+  user.participationTokenBalance = BigInt.fromI32(0);
+  user.totalVotes = BigInt.fromI32(0);
+  user.totalTasksCompleted = BigInt.fromI32(0);
+  user.totalTasksCancelled = BigInt.fromI32(0);
+  user.totalTasksLostToExpiry = BigInt.fromI32(0);
+  user.totalModulesCompleted = BigInt.fromI32(0);
+  user.totalClaimsAmount = BigInt.fromI32(0);
+  user.totalPaymentsAmount = BigInt.fromI32(0);
+  user.totalTokenRequestsAmount = BigInt.fromI32(0);
+  user.firstSeenAt = BigInt.fromI32(1000);
+  user.firstSeenAtBlock = BigInt.fromI32(100);
+  user.lastActiveAt = BigInt.fromI32(1000);
+  user.lastActiveAtBlock = BigInt.fromI32(100);
+  user.currentHatIds = [];
+  user.membershipStatus = "Active";
+  user.joinMethod = "QuickJoin";
+  user.save();
+}
+
 describe("TaskManager", () => {
   afterEach(() => {
     clearStore();
@@ -286,6 +356,138 @@ describe("TaskManager", () => {
     assert.fieldEquals("Task", expectedTaskId, "requiresApplication", "true");
     // Verify task links to composite project ID
     assert.fieldEquals("Task", expectedTaskId, "project", expectedProjectId);
+  });
+
+  test("Batch-created tasks with identical metadata get distinct, task-scoped metadata links", () => {
+    // Regression test for the graph-node indexing error:
+    //   "can not append operations that go backwards from Insert { TaskMetadata[...] }"
+    // Tasks created in ONE batch transaction share a tx hash, and tasks with
+    // identical metadata (e.g. the same title) produce an identical IPFS CID.
+    // The old txHash-CID entity id collided across those tasks, spawning two file
+    // data sources that wrote the same TaskMetadata id in the same block. The id
+    // is now scoped by taskId (taskManager-taskId), so the links must differ.
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    let projectEvent = createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    );
+    handleProjectCreated(projectEvent);
+
+    // Same title + same metadata hash => same CID. createTaskCreatedEvent reuses
+    // newMockEvent()'s default transaction hash, so both share a tx hash (batch).
+    let sharedTitle = Bytes.fromHexString("0x48656c70206d6f7665"); // "Help move"
+    let sharedMetadataHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+    );
+    let bountyToken = Address.fromString("0x0000000000000000000000000000000000000001");
+
+    let event2 = createTaskCreatedEvent(
+      BigInt.fromI32(2), projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, sharedTitle, sharedMetadataHash
+    );
+    handleTaskCreated(event2);
+
+    let event3 = createTaskCreatedEvent(
+      BigInt.fromI32(3), projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, sharedTitle, sharedMetadataHash
+    );
+    handleTaskCreated(event3);
+
+    assert.entityCount("Task", 2);
+
+    let id2 = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-2";
+    let id3 = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-3";
+    let task2 = Task.load(id2);
+    let task3 = Task.load(id3);
+    assert.assertTrue(task2 != null);
+    assert.assertTrue(task3 != null);
+
+    let meta2 = task2!.metadata;
+    let meta3 = task3!.metadata;
+    assert.assertTrue(meta2 != null);
+    assert.assertTrue(meta3 != null);
+
+    // Core guard: identical-metadata batch tasks must NOT share a TaskMetadata id.
+    assert.assertTrue(meta2 != meta3);
+
+    // Each link is scoped by its own task id and shares the same CID suffix.
+    let cid2 = meta2!.substring((id2 + "-").length);
+    let cid3 = meta3!.substring((id3 + "-").length);
+    assert.assertTrue(cid2 == cid3);
+    assert.fieldEquals("Task", id2, "metadata", id2 + "-" + cid2);
+    assert.fieldEquals("Task", id3, "metadata", id3 + "-" + cid2);
+  });
+
+  test("Same task re-referencing identical metadata across txs keeps a stable link", () => {
+    // Regression test for the second graph-node indexing error:
+    //   "impossible combination of entity operations: Insert { TaskMetadata[...] }
+    //    and then Insert { ... }"
+    // A task can re-reference the SAME metadata in a LATER tx/block (TaskRejected
+    // restores the original description). The file data source then runs again;
+    // graph-node dedupes file data sources by (template, CID, context), so the
+    // context carries ONLY taskId (no per-block timestamp) and the metadata link id
+    // is identical to the one set at creation, regardless of tx/block. With the old
+    // txHash-CID id the restored link differed, producing a duplicate insert.
+    setupTaskManagerEntities();
+
+    let projectId = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    let projectEvent = createProjectCreatedEvent(
+      projectId,
+      Bytes.fromHexString("0xabcd"),
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000001234"),
+      BigInt.fromI32(1000)
+    );
+    handleProjectCreated(projectEvent);
+
+    let taskId = BigInt.fromI32(0);
+    let title = Bytes.fromHexString("0x4164646578656373"); // "Addexecs"
+    let metadataHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000deadbeef"
+    );
+    let bountyToken = Address.fromString("0x0000000000000000000000000000000000000001");
+
+    // Create the task in tx 0xaa...
+    let createEvent = createTaskCreatedEvent(
+      taskId, projectId, BigInt.fromI32(100), bountyToken,
+      BigInt.fromI32(0), false, title, metadataHash
+    );
+    createEvent.transaction.hash = Bytes.fromHexString(
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    handleTaskCreated(createEvent);
+
+    let entityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-0";
+    let taskAfterCreate = Task.load(entityId);
+    assert.assertTrue(taskAfterCreate != null);
+    let linkAfterCreate = taskAfterCreate!.metadata;
+    assert.assertTrue(linkAfterCreate != null);
+    // Link is task-scoped (starts with the task entity id), never tx-scoped.
+    assert.assertTrue(linkAfterCreate!.substring(0, (entityId + "-").length) == entityId + "-");
+
+    // Reject in a DIFFERENT tx 0xbb... -> restores task.metadata to the original
+    // description metadata (re-referencing the same CID at a later block).
+    let rejector = Address.fromString("0x0000000000000000000000000000000000000003");
+    let rejectionHash = Bytes.fromHexString(
+      "0x00000000000000000000000000000000000000000000000000000000feedface"
+    );
+    let rejectEvent = createTaskRejectedEvent(taskId, rejector, rejectionHash);
+    rejectEvent.transaction.hash = Bytes.fromHexString(
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+    rejectEvent.logIndex = BigInt.fromI32(1);
+    handleTaskRejected(rejectEvent);
+
+    // Restored link must be byte-identical to the creation link: stable across txs.
+    // (Old txHash-CID id would differ here, since the two events have different hashes.)
+    assert.fieldEquals("Task", entityId, "metadata", linkAfterCreate!);
   });
 
   test("Task assigned updates status", () => {
@@ -1214,5 +1416,157 @@ describe("TaskManager", () => {
     assert.entityCount("GlobalRolePermission", 1); // not deleted
     assert.fieldEquals("GlobalRolePermission", id, "mask", "0");
     assert.fieldEquals("GlobalRolePermission", id, "canBudget", "false");
+  });
+
+
+  test("TaskCreated initializes reclaimCount and null deadlines", () => {
+    let entityId = setupDeadlineTask(BigInt.fromI32(1));
+    assert.fieldEquals("Task", entityId, "reclaimCount", "0");
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.completionWindow === null);
+    assert.assertTrue(task.absoluteDeadline === null);
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("TaskDeadlinesSet stores values and normalizes zeros to null", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(taskId, BigInt.fromI32(1900000000), BigInt.fromI32(604800))
+    );
+    assert.fieldEquals("Task", entityId, "absoluteDeadline", "1900000000");
+    assert.fieldEquals("Task", entityId, "completionWindow", "604800");
+
+    // updateTask clearing both knobs emits zeros → normalized back to null
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(taskId, BigInt.fromI32(0), BigInt.fromI32(0))
+    );
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.absoluteDeadline === null);
+    assert.assertTrue(task.completionWindow === null);
+  });
+
+  test("TaskDeadlinesSet on a non-existent task is a no-op", () => {
+    setupTaskManagerEntities();
+    handleTaskDeadlinesSet(
+      createTaskDeadlinesSetEvent(BigInt.fromI32(99), BigInt.fromI32(1900000000), BigInt.fromI32(60))
+    );
+    assert.entityCount("Task", 0);
+  });
+
+  test("TaskClaimDeadlineSet stores the deadline and zero clears to null", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(1900000123)));
+    assert.fieldEquals("Task", entityId, "claimDeadline", "1900000123");
+
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(0)));
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("TaskClaimExpired creates a TaskClaimExpiry, increments reclaimCount, clears claimDeadline", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(1900000123)));
+
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(7);
+    handleTaskClaimExpired(expiredEvent);
+
+    assert.entityCount("TaskClaimExpiry", 1);
+    let expiryId = expiredEvent.transaction.hash.concatI32(7).toHexString();
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "previousClaimer", alice.toHexString());
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "newClaimer", bob.toHexString());
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "task", entityId);
+    assert.fieldEquals("Task", entityId, "reclaimCount", "1");
+    // Defensive clear — the follow-up TaskClaimDeadlineSet re-sets it when a window exists.
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.claimDeadline === null);
+  });
+
+  test("Takeover flow switches assignee and restarts the claim deadline", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+
+    // Alice claims; window deadline t1.
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(2000)));
+    assert.fieldEquals("Task", entityId, "assignee", alice.toHexString());
+
+    // Expiry + Bob takes over (contract emits these in this order in one tx).
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(1);
+    handleTaskClaimExpired(expiredEvent);
+    handleTaskClaimed(createTaskClaimedEvent(taskId, bob));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(3000)));
+
+    assert.fieldEquals("Task", entityId, "assignee", bob.toHexString());
+    assert.fieldEquals("Task", entityId, "status", "Assigned");
+    assert.fieldEquals("Task", entityId, "claimDeadline", "3000");
+    assert.fieldEquals("Task", entityId, "reclaimCount", "1");
+    assert.entityCount("TaskClaimExpiry", 1);
+  });
+
+  test("TaskClaimed links assigneeUser and clears the previous link on takeover", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let nonMember = Address.fromString("0x00000000000000000000000000000000000de4d1");
+    createDeadlineTestUser(alice);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    assert.fieldEquals("Task", entityId, "assigneeUser", aliceUserId);
+
+    // Takeover by a NON-member: the stale link must be cleared, not left pointing at Alice.
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, nonMember);
+    expiredEvent.logIndex = BigInt.fromI32(2);
+    handleTaskClaimExpired(expiredEvent);
+    handleTaskClaimed(createTaskClaimedEvent(taskId, nonMember));
+
+    assert.fieldEquals("Task", entityId, "assignee", nonMember.toHexString());
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.assigneeUser === null);
+  });
+
+  test("TaskClaimExpired increments the previous claimer's totalTasksLostToExpiry", () => {
+    let taskId = BigInt.fromI32(1);
+    setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+    createDeadlineTestUser(alice);
+    createDeadlineTestUser(bob);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+    let expiryId: string;
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    let expiredEvent = createTaskClaimExpiredEvent(taskId, alice, bob);
+    expiredEvent.logIndex = BigInt.fromI32(3);
+    handleTaskClaimExpired(expiredEvent);
+
+    assert.fieldEquals("User", aliceUserId, "totalTasksLostToExpiry", "1");
+    expiryId = expiredEvent.transaction.hash.concatI32(3).toHexString();
+    assert.fieldEquals("TaskClaimExpiry", expiryId, "previousClaimerUser", aliceUserId);
+    assert.fieldEquals(
+      "TaskClaimExpiry",
+      expiryId,
+      "newClaimerUser",
+      orgId.toHexString() + "-" + bob.toHexString()
+    );
   });
 });

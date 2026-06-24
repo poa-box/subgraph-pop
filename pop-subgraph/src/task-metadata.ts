@@ -4,26 +4,41 @@ import { TaskMetadata } from "../generated/schema";
 /**
  * Handler for IPFS file data source that parses task metadata JSON.
  *
- * Creates a mutable TaskMetadata entity keyed by txHash-CID for uniqueness.
- * Uses "load or create" pattern which is safe for mutable entities and
- * handles retries gracefully without triggering duplicate key constraint violations.
+ * The entity ID is `taskId-CID` where taskId is the globally-unique task entity id
+ * (taskManager-taskId, so it is org-scoped — on-chain task ids repeat across orgs).
+ * This must hold for two independent reasons, both of which otherwise crash the
+ * indexer because file data sources run in isolated causality regions:
+ *
+ *   1. Cross-task: batch-created tasks share a tx hash, and identical metadata
+ *      (e.g. same title) yields the same CID. A txHash-CID key would collide
+ *      across those tasks ("can not append operations that go backwards").
+ *
+ *   2. Same task, different blocks: when a task re-references the same metadata
+ *      later (e.g. TaskRejected restoring the original description), the indexer
+ *      runs the file data source again. graph-node deduplicates file data sources
+ *      by (template, CID, context), so the context MUST be identical across those
+ *      references for the duplicate to be dropped. We therefore pass ONLY taskId
+ *      (no per-block timestamp) — a timestamp in the context defeated dedup and
+ *      produced two Inserts of the same id ("impossible combination of entity
+ *      operations"). This mirrors the ProposalMetadata pattern.
+ *
+ * `indexedAt` is intentionally not populated (kept nullable for backward compat):
+ * a per-block timestamp cannot live in the context without breaking dedup, and the
+ * task's own createdAt/updatedAt already carry that information.
  */
 export function handleTaskMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
   let context = dataSource.context();
   let taskId = context.getString("taskId");
-  let timestamp = context.getBigInt("timestamp");
-  let txHash = context.getBytes("txHash");
 
-  // Entity ID includes tx hash for uniqueness
-  let entityId = txHash.toHexString() + "-" + ipfsCid;
+  // Entity ID is scoped by the (globally unique) task id for uniqueness
+  let entityId = taskId + "-" + ipfsCid;
 
   // Load or create metadata entity (mutable entity - safe to update)
   let metadata = TaskMetadata.load(entityId);
   if (metadata == null) {
     metadata = new TaskMetadata(entityId);
     metadata.task = taskId;
-    metadata.indexedAt = timestamp;
   }
 
   // Try to parse the JSON content
@@ -84,6 +99,19 @@ export function handleTaskMetadata(content: Bytes): void {
   let rejectionValue = jsonObject.get("rejectionReason");
   if (rejectionValue != null && !rejectionValue.isNull() && rejectionValue.kind == JSONValueKind.STRING) {
     metadata.rejection = rejectionValue.toString();
+  }
+
+  // Parse optional soft due date (unix seconds, written by the frontend; v6).
+  // Display-only — never enforced on-chain. Tolerates absence and wrong types;
+  // fractional values are truncated (same pattern as proposal-metadata timestamps).
+  let dueDateValue = jsonObject.get("dueDate");
+  if (dueDateValue != null && !dueDateValue.isNull() && dueDateValue.kind == JSONValueKind.NUMBER) {
+    let raw = dueDateValue.toF64().toString();
+    let dotIndex = raw.indexOf(".");
+    if (dotIndex >= 0) {
+      raw = raw.substring(0, dotIndex);
+    }
+    metadata.dueDate = BigInt.fromString(raw);
   }
 
   metadata.save();
