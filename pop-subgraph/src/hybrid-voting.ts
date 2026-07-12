@@ -298,6 +298,9 @@ export function handleNewProposal(event: NewProposal): void {
   // Creator is no longer in event, use transaction.from
   proposal.creator = event.transaction.from;
   proposal.creatorUsername = getUsernameForAddress(event.transaction.from);
+  // Frontend-facing aliases (proposer/proposerUsername) populated identically to creator
+  proposal.proposer = event.transaction.from;
+  proposal.proposerUsername = getUsernameForAddress(event.transaction.from);
 
   // Link to User entity
   let votingContract = HybridVotingContract.load(event.address);
@@ -312,6 +315,10 @@ export function handleNewProposal(event: NewProposal): void {
       proposal.creatorUser = user.id;
     }
   }
+
+  // Snapshot the voting-class config version this proposal was created under.
+  // Defaults to 0 if the contract entity or its classVersion is not yet set.
+  proposal.classesVersion = votingContract ? votingContract.classVersion : BigInt.fromI32(0);
 
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;
@@ -352,6 +359,9 @@ export function handleNewHatProposal(event: NewHatProposal): void {
   // Creator is no longer in event, use transaction.from
   proposal.creator = event.transaction.from;
   proposal.creatorUsername = getUsernameForAddress(event.transaction.from);
+  // Frontend-facing aliases (proposer/proposerUsername) populated identically to creator
+  proposal.proposer = event.transaction.from;
+  proposal.proposerUsername = getUsernameForAddress(event.transaction.from);
 
   // Link to User entity
   let votingContract = HybridVotingContract.load(event.address);
@@ -366,6 +376,10 @@ export function handleNewHatProposal(event: NewHatProposal): void {
       proposal.creatorUser = user.id;
     }
   }
+
+  // Snapshot the voting-class config version this proposal was created under.
+  // Defaults to 0 if the contract entity or its classVersion is not yet set.
+  proposal.classesVersion = votingContract ? votingContract.classVersion : BigInt.fromI32(0);
 
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;

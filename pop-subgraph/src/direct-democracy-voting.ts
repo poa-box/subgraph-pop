@@ -363,6 +363,21 @@ export function handleNewProposal(event: NewProposal): void {
 
   proposal.proposalId = event.params.id;
   proposal.directDemocracyVoting = event.address;
+  // DDV creation event carries no creator param — use transaction.from
+  proposal.proposer = event.transaction.from;
+  proposal.proposerUsername = getUsernameForAddress(event.transaction.from);
+  let ddvContract = DirectDemocracyVotingContract.load(event.address);
+  if (ddvContract) {
+    let proposerUser = loadExistingUser(
+      ddvContract.organization,
+      event.transaction.from,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (proposerUser) {
+      proposal.proposerUser = proposerUser.id;
+    }
+  }
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;
   proposal.numOptions = event.params.numOptions;
@@ -398,6 +413,21 @@ export function handleNewHatProposal(event: NewHatProposal): void {
 
   proposal.proposalId = event.params.id;
   proposal.directDemocracyVoting = event.address;
+  // DDV creation event carries no creator param — use transaction.from
+  proposal.proposer = event.transaction.from;
+  proposal.proposerUsername = getUsernameForAddress(event.transaction.from);
+  let ddvContract = DirectDemocracyVotingContract.load(event.address);
+  if (ddvContract) {
+    let proposerUser = loadExistingUser(
+      ddvContract.organization,
+      event.transaction.from,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (proposerUser) {
+      proposal.proposerUser = proposerUser.id;
+    }
+  }
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;
   proposal.numOptions = event.params.numOptions;

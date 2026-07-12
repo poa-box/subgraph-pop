@@ -529,6 +529,9 @@ type Proposal @entity(immutable: false) {
   creator: Bytes! # from transaction.from
   creatorUsername: String
   creatorUser: User
+  proposer: Bytes! # alias of creator (frontend-facing name); populated identically from transaction.from
+  proposerUsername: String # alias of creatorUsername; resolved via getUsernameForAddress
+  classesVersion: BigInt! # HybridVotingContract.classVersion snapshotted at creation — the voting-class config this proposal was created under (for result-drift-safe tallying)
   title: String! # proposal title
   descriptionHash: Bytes! # hash of proposal description (IPFS CID as bytes32)
   metadata: ProposalMetadata # Fetched from IPFS - contains description and option names
@@ -622,6 +625,9 @@ type DDVProposal @entity(immutable: false) {
   id: String! # directDemocracyVoting-proposalId
   proposalId: BigInt!
   directDemocracyVoting: DirectDemocracyVotingContract!
+  proposer: Bytes! # from transaction.from (DDV creation event carries no creator param)
+  proposerUsername: String # resolved via getUsernameForAddress
+  proposerUser: User # linked User entity when the proposer is a joined member
   title: String! # proposal title
   descriptionHash: Bytes! # hash of proposal description (IPFS CID as bytes32)
   metadata: ProposalMetadata # Fetched from IPFS - contains description and option names
@@ -1893,6 +1899,8 @@ type ProposalMetadata @entity(immutable: true) {
   description: String! # Full proposal description text
   optionNames: [String!]! # Names for each voting option
   createdAt: BigInt # Timestamp from IPFS metadata
+  actionSummaries: [String!] # Optional human-readable summaries of the on-chain actions this proposal enacts (one per option or per action); missing key leaves this null
+  promotedFrom: String # Optional provenance: the id of a settled temperature-check/poll this proposal was promoted from; missing key leaves this null
 }
 
 type RegisteredContract @entity(immutable: false) {
