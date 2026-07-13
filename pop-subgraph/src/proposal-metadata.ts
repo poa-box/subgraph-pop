@@ -69,6 +69,28 @@ export function handleProposalMetadata(content: Bytes): void {
     metadata.optionNames = names;
   }
 
+  // Parse optional actionSummaries array (human-readable summaries of on-chain actions)
+  let actionSummariesValue = jsonObject.get("actionSummaries");
+  if (actionSummariesValue != null && !actionSummariesValue.isNull() && actionSummariesValue.kind == JSONValueKind.ARRAY) {
+    let summariesArray = actionSummariesValue.toArray();
+    let summaries: string[] = [];
+    for (let i = 0; i < summariesArray.length; i++) {
+      let summaryValue = summariesArray[i];
+      if (!summaryValue.isNull() && summaryValue.kind == JSONValueKind.STRING) {
+        summaries.push(summaryValue.toString());
+      } else {
+        summaries.push("");
+      }
+    }
+    metadata.actionSummaries = summaries;
+  }
+
+  // Parse optional promotedFrom provenance string
+  let promotedFromValue = jsonObject.get("promotedFrom");
+  if (promotedFromValue != null && !promotedFromValue.isNull() && promotedFromValue.kind == JSONValueKind.STRING) {
+    metadata.promotedFrom = promotedFromValue.toString();
+  }
+
   // Parse createdAt timestamp
   let createdAtValue = jsonObject.get("createdAt");
   if (createdAtValue != null && !createdAtValue.isNull() && createdAtValue.kind == JSONValueKind.NUMBER) {
