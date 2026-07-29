@@ -1157,8 +1157,112 @@ type ZkEmailInvites @entity(immutable: false) {
   activeAllowlistCid: String
   # The indexed content of the active allowlist (may be null if IPFS is slow/unavailable).
   activeAllowlist: ZkEmailAllowlist
+
+  # ---- Module wiring ----
+  # Seeded by binding the proxy when the module is first indexed, then kept fresh by the
+  # *Updated events. Without these, every consumer has to open its own RPC connection and
+  # make six eth_calls just to render the module's configuration.
+  executor: Bytes
+  domainVerifier: Bytes
+  emailVerifier: Bytes
+  # The PoaDKIMRegistry this module trusts. Its keys are indexed as DkimKey, so a client can
+  # answer "is this domain seeded?" — the most common cause of a failed claim — without an
+  # eth_getLogs scan over the registry's whole history.
+  dkimRegistry: Bytes
+  accountRegistry: Bytes
+  universalFactory: Bytes
+
+  # ---- Claim history ----
+  claims: [ZkEmailClaim!]! @derivedFrom(field: "module")
+  claimCount: Int!
+  # One row per address that has consumed its specific-address entry (the contract's
+  # `registeredEmails` mapping). Mirrors it exactly, including RegisteredEmailCleared resets.
+  registeredEmails: [ZkEmailRegisteredEmail!]! @derivedFrom(field: "module")
+
   createdAt: BigInt
   lastUpdatedAt: BigInt
+}
+
+# Which of the two claim paths a claim took. They are DIFFERENT merkle leaves (kind 0 vs 1)
+# with different dedup rules: a domain claim is limited only by the per-message nullifier,
+# while a specific-address claim additionally consumes that address's one registration.
+enum ZkEmailClaimKind {
+  Domain
+  Email
+}
+
+type ZkEmailClaim @entity(immutable: true) {
+  id: String! # txHash-logIndex
+  module: ZkEmailInvites!
+  organization: Organization!
+  claimer: Bytes!
+  claimerUser: User
+  claimerUsername: String
+  kind: ZkEmailClaimKind!
+  # domainHash for kind Domain, emailHash for kind Email — both are Poseidon commitments
+  # (the circuit's fromDomainHash / emailHash signals), NOT keccak.
+  identifierHash: Bytes!
+  hatIds: [BigInt!]!
+  # Per-message replay guard. Only the RoleClaimed* events carry it; the onboarding
+  # (RegisteredAndClaimed*) variants do not, so it is null for those.
+  nullifier: Bytes
+  # Set when the claim also registered a username in the same transaction (onboarding path).
+  registeredUsername: String
+  # Passkey credential id, for the onboarding path only.
+  credentialId: Bytes
+  claimedAt: BigInt!
+  claimedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+type ZkEmailRegisteredEmail @entity(immutable: false) {
+  id: String! # moduleAddress-emailHash
+  module: ZkEmailInvites!
+  emailHash: Bytes!
+  # False after RegisteredEmailCleared — governance can free an address to claim again.
+  registered: Boolean!
+  claimer: Bytes
+  claimedAt: BigInt
+  clearedAt: BigInt
+}
+
+type ZkEmailNullifier @entity(immutable: true) {
+  id: String! # moduleAddress-nullifier
+  module: ZkEmailInvites!
+  nullifier: Bytes!
+  usedAt: BigInt!
+  usedAtBlock: BigInt!
+}
+
+# ---- DKIM registry (ERC-7969) ----
+# A claim is verified against the DKIM key of the PROVEN sending domain, so an allowlisted
+# domain with no seeded key produces a claim that reverts InvalidDKIMKey every time. Indexing
+# the registry makes that state queryable instead of requiring a full-range log scan.
+type DkimRegistry @entity(immutable: false) {
+  id: Bytes! # registry address
+  owner: Bytes
+  keys: [DkimKey!]! @derivedFrom(field: "registry")
+  keyCount: Int!
+  createdAt: BigInt
+  lastUpdatedAt: BigInt
+}
+
+type DkimKey @entity(immutable: false) {
+  id: String! # registryAddress-domainHash-keyHash
+  registry: DkimRegistry!
+  # POSEIDON commitment of the domain (the circuit's fromDomainHash), not keccak — the
+  # registry's legacy setKeyForDomain helper keys by keccak and can never match a live claim.
+  domainHash: Bytes!
+  keyHash: Bytes!
+  # Currently usable: set by KeyHashSet, cleared by KeyHashRevoked or an expiry in the past.
+  # Consumers should also check validUntil against the current time.
+  valid: Boolean!
+  # 0 means "no expiry" (the contract stores a sentinel for never-expires).
+  validUntil: BigInt!
+  setAt: BigInt!
+  setAtBlock: BigInt!
+  revokedAt: BigInt
+  transactionHash: Bytes!
 }
 
 # IPFS-indexed content of a single allowlist commit, keyed by its CIDv0.
