@@ -1165,18 +1165,22 @@ type ZkEmailInvites @entity(immutable: false) {
   executor: Bytes
   domainVerifier: Bytes
   emailVerifier: Bytes
-  # The PoaDKIMRegistry this module trusts. Its keys are indexed as DkimKey, so a client can
-  # answer "is this domain seeded?" — the most common cause of a failed claim — without an
-  # eth_getLogs scan over the registry's whole history.
-  dkimRegistry: Bytes
+  # The PoaDKIMRegistry this module trusts, as a reference so one query can walk
+  # module -> registry -> keys and answer "is this domain seeded?" — the most common cause of a
+  # failed claim — without an eth_getLogs scan or a second round trip. The row is created even
+  # on a chain where no registry is indexed, so a null `keys` list is distinguishable from a
+  # missing registry.
+  dkimRegistry: DkimRegistry
   accountRegistry: Bytes
   universalFactory: Bytes
 
   # ---- Claim history ----
   claims: [ZkEmailClaim!]! @derivedFrom(field: "module")
   claimCount: Int!
-  # One row per address that has consumed its specific-address entry (the contract's
-  # `registeredEmails` mapping). Mirrors it exactly, including RegisteredEmailCleared resets.
+  # Specific-address invite state. A row with `registered: true` is one seat consumed (the
+  # contract's `registeredEmails` mapping); rows with `registered: false` are addresses that
+  # were cleared — including ones that never claimed, since clearRegisteredEmail emits even
+  # when the mapping entry was absent. Filter on `registered: true` to count consumed seats.
   registeredEmails: [ZkEmailRegisteredEmail!]! @derivedFrom(field: "module")
 
   createdAt: BigInt
@@ -1226,6 +1230,14 @@ type ZkEmailRegisteredEmail @entity(immutable: false) {
   clearedAt: BigInt
 }
 
+# PARTIAL SET — absence does NOT prove a nullifier is unused.
+#
+# Only the RoleClaimed{ByDomain,ByEmail} events carry the nullifier. The passkey onboarding
+# paths consume one on-chain just the same (`_claimDomain`/`_claimEmail` both set
+# usedNullifiers), but RegisteredAndClaimed{ByDomain,ByEmail} do not emit it, so those are
+# missing here. Treat a hit as authoritative and a miss as unknown; for a definitive answer
+# call ZkEmailInvites.isNullifierUsed(). Indexing the onboarding nullifiers needs a contract
+# change to include it in those events.
 type ZkEmailNullifier @entity(immutable: true) {
   id: String! # moduleAddress-nullifier
   module: ZkEmailInvites!
@@ -1241,8 +1253,10 @@ type ZkEmailNullifier @entity(immutable: true) {
 type DkimRegistry @entity(immutable: false) {
   id: Bytes! # registry address
   owner: Bytes
+  # Every (domainHash, keyHash) pair ever seen, including revoked ones and the dead
+  # keccak-keyed entries the registry's legacy setKeyForDomain helper produces. Filter on
+  # `valid` (and the expiry, see DkimKey.validUntil) to get usable keys.
   keys: [DkimKey!]! @derivedFrom(field: "registry")
-  keyCount: Int!
   createdAt: BigInt
   lastUpdatedAt: BigInt
 }
@@ -1254,10 +1268,13 @@ type DkimKey @entity(immutable: false) {
   # registry's legacy setKeyForDomain helper keys by keccak and can never match a live claim.
   domainHash: Bytes!
   keyHash: Bytes!
-  # Currently usable: set by KeyHashSet, cleared by KeyHashRevoked or an expiry in the past.
-  # Consumers should also check validUntil against the current time.
+  # The registry's own boolean at the time of the last event: KeyHashSet(valid) / false after a
+  # revoke. It does NOT account for a time-bounded expiry lapsing with no further event, so a
+  # consumer must reproduce isKeyHashValid: valid && (validUntil == NO_EXPIRY || now <= validUntil).
   valid: Boolean!
-  # 0 means "no expiry" (the contract stores a sentinel for never-expires).
+  # Raw expiry as stored on-chain. 0 = unset or REVOKED (never "permanent"); 2^256-1 (NO_EXPIRY)
+  # = valid until explicitly revoked, which is what both live Gnosis keys carry; any other value
+  # is a unix cut-off. Note 2^256-1 overflows a JS Number — compare as a string/BigInt.
   validUntil: BigInt!
   setAt: BigInt!
   setAtBlock: BigInt!
