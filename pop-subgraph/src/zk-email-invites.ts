@@ -22,6 +22,7 @@ import {
 import { ZkEmailAllowlist as ZkEmailAllowlistTemplate } from "../generated/templates";
 import { getUsernameForAddress } from "./utils";
 import { ZkEmailInvites as ZkEmailInvitesContract } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
+import { ensureDkimRegistry } from "./poa-dkim-registry";
 
 // 32-byte zero digest. A zero allowlistCid means the allowlist was cleared (the module is dormant).
 const ZERO_HASH: Bytes = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -346,6 +347,9 @@ export function handleEmailVerifierUpdated(event: EmailVerifierUpdatedEvent): vo
 export function handleDKIMRegistryUpdated(event: DKIMRegistryUpdatedEvent): void {
   let module = touch(event.address, event.block.timestamp);
   if (module == null) return;
+  // dkimRegistry is an entity reference, so the row must exist for it to resolve — the registry
+  // dataSource may not have seen an event yet, or may not be configured on this chain at all.
+  ensureDkimRegistry(event.params.registry, event.block.timestamp);
   module.dkimRegistry = event.params.registry;
   module.save();
 }

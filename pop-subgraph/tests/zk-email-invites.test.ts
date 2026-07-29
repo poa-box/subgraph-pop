@@ -11,9 +11,11 @@ import {
   handleActiveAllowlistSet,
   handleRoleClaimedByDomain,
   handleRoleClaimedByEmail,
+  handleRegisteredAndClaimedByDomain,
   handleRegisteredAndClaimedByEmail,
   handleRegisteredEmailCleared,
-  handleDKIMRegistryUpdated
+  handleDKIMRegistryUpdated,
+  handleDomainVerifierUpdated
 } from "../src/zk-email-invites";
 import { handleZkEmailAllowlist } from "../src/zk-email-allowlist";
 import { handleContractRegistered } from "../src/org-registry";
@@ -22,9 +24,11 @@ import {
   createActiveAllowlistSetEvent,
   createRoleClaimedByDomainEvent,
   createRoleClaimedByEmailEvent,
+  createRegisteredAndClaimedByDomainEvent,
   createRegisteredAndClaimedByEmailEvent,
   createRegisteredEmailClearedEvent,
-  createDKIMRegistryUpdatedEvent
+  createDKIMRegistryUpdatedEvent,
+  createDomainVerifierUpdatedEvent
 } from "./zk-email-invites-utils";
 import {
   Organization,
@@ -249,6 +253,42 @@ describe("ZkEmailInvites", () => {
   });
 
   describe("module wiring", () => {
+    test("the DOMAIN onboarding path does not consume a specific-address registration", () => {
+      // The mirror of the Email onboarding test. Domain claims have no per-address limit
+      // on-chain, so writing a registration row here would make the CLI tell every
+      // domain-invited user they had already used their invite — blocking a valid claim.
+      createOrgWithZkModule();
+
+      handleRegisteredAndClaimedByDomain(
+        createRegisteredAndClaimedByDomainEvent(
+          Address.fromString(MODULE),
+          Address.fromString("0x00000000000000000000000000000000000000aa"),
+          Bytes.fromHexString("0x00000000000000000000000000000000000000000000000000000000000000c1"),
+          "bob",
+          Bytes.fromHexString("0x14d46e073cbff5944a738ea295de6c7447606fa5a270571229d8a4b1e7ca77e5"),
+          [BigInt.fromI32(42)]
+        )
+      );
+
+      assert.entityCount("ZkEmailClaim", 1);
+      assert.entityCount("ZkEmailRegisteredEmail", 0);
+    });
+
+    test("DomainVerifierUpdated records the verifier", () => {
+      createOrgWithZkModule();
+      createMockedFunction(Address.fromString(MODULE), "executor", "executor():(address)")
+        .returns([ethereum.Value.fromAddress(Address.fromString("0x0000000000000000000000000000000000000001"))]);
+
+      handleDomainVerifierUpdated(
+        createDomainVerifierUpdatedEvent(
+          Address.fromString(MODULE),
+          Address.fromString("0x00000000000000000000000000000000000000b1")
+        )
+      );
+
+      assert.fieldEquals("ZkEmailInvites", MODULE, "domainVerifier", "0x00000000000000000000000000000000000000b1");
+    });
+
     test("DKIMRegistryUpdated records the registry and resolves the executor once", () => {
       createOrgWithZkModule();
 

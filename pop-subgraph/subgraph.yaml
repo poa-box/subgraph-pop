@@ -989,6 +989,34 @@ templates:
         - event: OwnershipTransferStarted(indexed address,indexed address)
           handler: handleOwnershipTransferStarted
       file: ./src/switchable-beacon.ts
+  # Governance can repoint a module at a freshly deployed registry via setDKIMRegistry
+  # (PoaDKIMRegistry is non-upgradeable by design). The static dataSource above only watches the
+  # currently-configured address, so handleDKIMRegistryUpdated spawns this template for any
+  # registry it has not seen before. Writes are idempotent with the static source: DkimKey ids
+  # are registry-scoped and nothing is incremented.
+  - kind: ethereum
+    name: PoaDKIMRegistryDynamic
+    network: arbitrum-one
+    source:
+      abi: PoaDKIMRegistry
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - DkimRegistry
+        - DkimKey
+      abis:
+        - name: PoaDKIMRegistry
+          file: ./abis/PoaDKIMRegistry.json
+      eventHandlers:
+        - event: KeyHashSet(indexed bytes32,indexed bytes32,bool,uint256)
+          handler: handleKeyHashSet
+        - event: KeyHashRevoked(indexed bytes32,indexed bytes32)
+          handler: handleKeyHashRevoked
+        - event: OwnershipTransferred(indexed address,indexed address)
+          handler: handleDkimOwnershipTransferred
+      file: ./src/poa-dkim-registry.ts
   - kind: file/ipfs
     name: OrgMetadata
     network: arbitrum-one
