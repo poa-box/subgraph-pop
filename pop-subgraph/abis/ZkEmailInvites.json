@@ -78,9 +78,9 @@
             "internalType": "bytes32"
           },
           {
-            "name": "domainName",
-            "type": "string",
-            "internalType": "string"
+            "name": "fromDomainHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
           }
         ]
       },
@@ -138,12 +138,12 @@
             "internalType": "bytes32"
           },
           {
-            "name": "domainName",
-            "type": "string",
-            "internalType": "string"
+            "name": "emailHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
           },
           {
-            "name": "emailHash",
+            "name": "fromDomainHash",
             "type": "bytes32",
             "internalType": "bytes32"
           }
@@ -163,6 +163,19 @@
         "name": "merkleProof",
         "type": "bytes32[]",
         "internalType": "bytes32[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "clearRegisteredEmail",
+    "inputs": [
+      {
+        "name": "emailHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "outputs": [],
@@ -267,6 +280,25 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "isEmailRegistered",
+    "inputs": [
+      {
+        "name": "emailHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -414,9 +446,9 @@
             "internalType": "bytes32"
           },
           {
-            "name": "domainName",
-            "type": "string",
-            "internalType": "string"
+            "name": "fromDomainHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
           }
         ]
       },
@@ -554,12 +586,12 @@
             "internalType": "bytes32"
           },
           {
-            "name": "domainName",
-            "type": "string",
-            "internalType": "string"
+            "name": "emailHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
           },
           {
-            "name": "emailHash",
+            "name": "fromDomainHash",
             "type": "bytes32",
             "internalType": "bytes32"
           }
@@ -841,6 +873,19 @@
   },
   {
     "type": "event",
+    "name": "RegisteredEmailCleared",
+    "inputs": [
+      {
+        "name": "emailHash",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "RoleClaimedByDomain",
     "inputs": [
       {
@@ -921,8 +966,35 @@
   },
   {
     "type": "error",
+    "name": "ClaimerNotEligible",
+    "inputs": [
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "EmailAlreadyRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "EmptyHats",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "HatOpenlyClaimable",
+    "inputs": [
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

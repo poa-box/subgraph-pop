@@ -149,6 +149,35 @@ dataSources:
         - event: HatStatusChanged(uint256,bool)
           handler: handleHatsStatusChanged
       file: ./src/hats.ts
+  # The PoaDKIMRegistry is a per-chain singleton, not a per-org module, so it is a static
+  # dataSource rather than a template. A template created from a module's dkimRegistry pointer
+  # would only see keys seeded AFTER that org deployed, and the registry is typically seeded
+  # once up front — the whole point is to know whether a domain was ever seeded.
+  - kind: ethereum
+    name: PoaDKIMRegistry
+    network: arbitrum-one
+    source:
+      abi: PoaDKIMRegistry
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 447059849
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - DkimRegistry
+        - DkimKey
+      abis:
+        - name: PoaDKIMRegistry
+          file: ./abis/PoaDKIMRegistry.json
+      eventHandlers:
+        - event: KeyHashSet(indexed bytes32,indexed bytes32,bool,uint256)
+          handler: handleKeyHashSet
+        - event: KeyHashRevoked(indexed bytes32,indexed bytes32)
+          handler: handleKeyHashRevoked
+        - event: OwnershipTransferred(indexed address,indexed address)
+          handler: handleDkimOwnershipTransferred
+      file: ./src/poa-dkim-registry.ts
 templates:
   - kind: ethereum
     name: OrgDeployer
@@ -721,6 +750,9 @@ templates:
         - ZkEmailInvites
         - ZkEmailAllowlist
         - ZkEmailAllowlistEntry
+        - ZkEmailClaim
+        - ZkEmailRegisteredEmail
+        - ZkEmailNullifier
       abis:
         - name: ZkEmailInvites
           file: ./abis/ZkEmailInvites.json
@@ -731,6 +763,22 @@ templates:
           handler: handleRoleClaimedByDomain
         - event: RoleClaimedByEmail(indexed address,indexed bytes32,uint256[],bytes32)
           handler: handleRoleClaimedByEmail
+        - event: RegisteredAndClaimedByDomain(indexed address,indexed bytes32,string,indexed bytes32,uint256[])
+          handler: handleRegisteredAndClaimedByDomain
+        - event: RegisteredAndClaimedByEmail(indexed address,indexed bytes32,string,indexed bytes32,uint256[])
+          handler: handleRegisteredAndClaimedByEmail
+        - event: RegisteredEmailCleared(indexed bytes32)
+          handler: handleRegisteredEmailCleared
+        - event: DomainVerifierUpdated(indexed address)
+          handler: handleDomainVerifierUpdated
+        - event: EmailVerifierUpdated(indexed address)
+          handler: handleEmailVerifierUpdated
+        - event: DKIMRegistryUpdated(indexed address)
+          handler: handleDKIMRegistryUpdated
+        - event: AccountRegistryUpdated(indexed address)
+          handler: handleAccountRegistryUpdated
+        - event: UniversalFactoryUpdated(indexed address)
+          handler: handleUniversalFactoryUpdated
       file: ./src/zk-email-invites.ts
   - kind: ethereum
     name: PaymentManager

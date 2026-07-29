@@ -303,8 +303,15 @@ function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: 
     if (existing == null) {
       let zk = new ZkEmailInvites(proxy);
       zk.organization = org.id;
+      zk.claimCount = 0;
       zk.createdAt = event.block.timestamp;
       zk.lastUpdatedAt = event.block.timestamp;
+      // The wiring (verifiers, registries, factory) is NOT read here: initialize() emits
+      // DomainVerifierUpdated / EmailVerifierUpdated / DKIMRegistryUpdated /
+      // AccountRegistryUpdated / UniversalFactoryUpdated precisely "so indexers read config
+      // from logs", and the template below is created before initialize() runs, so those
+      // events are captured. Binding the proxy here would only add an eth_call that reverts,
+      // since registration happens before initialization.
       zk.save();
 
       org.zkEmailInvites = proxy;
@@ -408,3 +415,5 @@ export function handleHatsTreeRegistered(event: HatsTreeRegisteredEvent): void {
     }
   }
 }
+
+
