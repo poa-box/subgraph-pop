@@ -19,6 +19,10 @@
     "Hats": {
       "address": "0x3bc1A0Ad72417f2d411118085256fC53CBdDd137",
       "startBlock": 447059849
+    },
+    "PoaDKIMRegistry": {
+      "address": "0xC2ddbc0A6fc4410eFE78904Bee48558eAd0dE112",
+      "startBlock": 489000759
     }
   },
   "gnosis": {
@@ -41,6 +45,10 @@
     "Hats": {
       "address": "0x3bc1A0Ad72417f2d411118085256fC53CBdDd137",
       "startBlock": 45407962
+    },
+    "PoaDKIMRegistry": {
+      "address": "0xC2ddbc0A6fc4410eFE78904Bee48558eAd0dE112",
+      "startBlock": 47420018
     }
   }
 }

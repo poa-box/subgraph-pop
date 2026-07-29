@@ -1,11 +1,28 @@
-import { Address, BigInt, Bytes, DataSourceContext } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, DataSourceContext, ethereum } from "@graphprotocol/graph-ts";
 import {
   ActiveAllowlistSet as ActiveAllowlistSetEvent,
   RoleClaimedByDomain as RoleClaimedByDomainEvent,
-  RoleClaimedByEmail as RoleClaimedByEmailEvent
+  RoleClaimedByEmail as RoleClaimedByEmailEvent,
+  RegisteredAndClaimedByDomain as RegisteredAndClaimedByDomainEvent,
+  RegisteredAndClaimedByEmail as RegisteredAndClaimedByEmailEvent,
+  RegisteredEmailCleared as RegisteredEmailClearedEvent,
+  DomainVerifierUpdated as DomainVerifierUpdatedEvent,
+  EmailVerifierUpdated as EmailVerifierUpdatedEvent,
+  DKIMRegistryUpdated as DKIMRegistryUpdatedEvent,
+  AccountRegistryUpdated as AccountRegistryUpdatedEvent,
+  UniversalFactoryUpdated as UniversalFactoryUpdatedEvent
 } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
-import { ZkEmailInvites } from "../generated/schema";
+import {
+  ZkEmailInvites,
+  ZkEmailClaim,
+  ZkEmailRegisteredEmail,
+  ZkEmailNullifier,
+  User
+} from "../generated/schema";
 import { ZkEmailAllowlist as ZkEmailAllowlistTemplate } from "../generated/templates";
+import { getUsernameForAddress } from "./utils";
+import { ZkEmailInvites as ZkEmailInvitesContract } from "../generated/templates/ZkEmailInvites/ZkEmailInvites";
+import { ensureDkimRegistry } from "./poa-dkim-registry";
 
 // 32-byte zero digest. A zero allowlistCid means the allowlist was cleared (the module is dormant).
 const ZERO_HASH: Bytes = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -91,29 +108,262 @@ export function handleActiveAllowlistSet(event: ActiveAllowlistSetEvent): void {
   createAllowlistDataSource(allowlistCid, moduleAddress);
 }
 
+/** How a User entity id is derived elsewhere in this subgraph: orgId-userAddress. */
+function userId(orgId: Bytes, claimer: Address): string {
+  return orgId.toHexString() + "-" + claimer.toHexString();
+}
+
 /**
- * RoleClaimedByDomain(address indexed claimer, bytes32 indexed domainHash, uint256[] hatIds, bytes32 nullifier).
- * Membership itself is indexed from the Hats TransferSingle/Batch handler; here we only freshen the
- * module's lastUpdatedAt so consumers can see recent activity.
+ * Record one claim, its nullifier, and (for specific-address claims) the address's now-spent
+ * registration. Shared by all four claim events so the four paths cannot drift.
+ *
+ * `nullifier` is null for the RegisteredAndClaimed* onboarding variants: those events carry a
+ * passkey credentialId instead, even though the contract still consumes a nullifier internally.
  */
-export function handleRoleClaimedByDomain(event: RoleClaimedByDomainEvent): void {
-  let module = ZkEmailInvites.load(event.address);
+function recordClaim(
+  event: ethereum.Event,
+  claimer: Address,
+  kind: string,
+  identifierHash: Bytes,
+  hatIds: BigInt[],
+  nullifier: Bytes | null,
+  registeredUsername: string | null,
+  credentialId: Bytes | null
+): void {
+  let moduleAddress = event.address;
+  let module = ZkEmailInvites.load(moduleAddress);
   if (module == null) {
     return;
   }
+
+  let id = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  let claim = new ZkEmailClaim(id);
+  claim.module = moduleAddress;
+  claim.organization = module.organization;
+  claim.claimer = claimer;
+  claim.claimerUsername = getUsernameForAddress(claimer);
+  // Link the User only when one already exists for this org — membership is indexed from the
+  // Hats TransferSingle handler, which may run after this event inside the same transaction.
+  let uid = userId(module.organization, claimer);
+  if (User.load(uid) != null) {
+    claim.claimerUser = uid;
+  }
+  claim.kind = kind;
+  claim.identifierHash = identifierHash;
+  claim.hatIds = hatIds;
+  claim.nullifier = nullifier;
+  claim.registeredUsername = registeredUsername;
+  claim.credentialId = credentialId;
+  claim.claimedAt = event.block.timestamp;
+  claim.claimedAtBlock = event.block.number;
+  claim.transactionHash = event.transaction.hash;
+  claim.save();
+
+  // The per-message replay guard. Immutable: a nullifier is set once and never unset.
+  if (nullifier !== null) {
+    let nid = moduleAddress.toHexString() + "-" + (nullifier as Bytes).toHexString();
+    if (ZkEmailNullifier.load(nid) == null) {
+      let n = new ZkEmailNullifier(nid);
+      n.module = moduleAddress;
+      n.nullifier = nullifier as Bytes;
+      n.usedAt = event.block.timestamp;
+      n.usedAtBlock = event.block.number;
+      n.save();
+    }
+  }
+
+  // A specific-address claim consumes that address's ONE registration (the contract reverts
+  // EmailAlreadyRegistered on a second attempt). Domain claims have no such limit, so they
+  // must not write this row.
+  if (kind == "Email") {
+    let rid = moduleAddress.toHexString() + "-" + identifierHash.toHexString();
+    let reg = ZkEmailRegisteredEmail.load(rid);
+    if (reg == null) {
+      reg = new ZkEmailRegisteredEmail(rid);
+      reg.module = moduleAddress;
+      reg.emailHash = identifierHash;
+    }
+    reg.registered = true;
+    reg.claimer = claimer;
+    reg.claimedAt = event.block.timestamp;
+    reg.clearedAt = null;
+    reg.save();
+  }
+
+  module.claimCount = module.claimCount + 1;
   module.lastUpdatedAt = event.block.timestamp;
   module.save();
 }
 
 /**
+ * RoleClaimedByDomain(address indexed claimer, bytes32 indexed domainHash, uint256[] hatIds, bytes32 nullifier).
+ * Membership itself is indexed from the Hats TransferSingle/Batch handler; this records the
+ * claim's provenance (who, via which allowlist entry, for which hats).
+ */
+export function handleRoleClaimedByDomain(event: RoleClaimedByDomainEvent): void {
+  recordClaim(
+    event,
+    event.params.claimer,
+    "Domain",
+    event.params.domainHash,
+    event.params.hatIds,
+    event.params.nullifier,
+    null,
+    null
+  );
+}
+
+/**
  * RoleClaimedByEmail(address indexed claimer, bytes32 indexed emailHash, uint256[] hatIds, bytes32 nullifier).
- * Light-touch like handleRoleClaimedByDomain — membership comes from the Hats handler.
  */
 export function handleRoleClaimedByEmail(event: RoleClaimedByEmailEvent): void {
-  let module = ZkEmailInvites.load(event.address);
+  recordClaim(
+    event,
+    event.params.claimer,
+    "Email",
+    event.params.emailHash,
+    event.params.hatIds,
+    event.params.nullifier,
+    null,
+    null
+  );
+}
+
+/**
+ * RegisteredAndClaimedByDomain(address indexed account, bytes32 indexed credentialId, string username,
+ * bytes32 indexed domainHash, uint256[] hatIds) — the passkey onboarding path, where registering a
+ * username and claiming the role happen in one transaction. Previously not indexed at all.
+ */
+export function handleRegisteredAndClaimedByDomain(event: RegisteredAndClaimedByDomainEvent): void {
+  recordClaim(
+    event,
+    event.params.account,
+    "Domain",
+    event.params.domainHash,
+    event.params.hatIds,
+    null,
+    event.params.username,
+    event.params.credentialId
+  );
+}
+
+/**
+ * RegisteredAndClaimedByEmail(...) — onboarding via a specific-address allowlist entry.
+ */
+export function handleRegisteredAndClaimedByEmail(event: RegisteredAndClaimedByEmailEvent): void {
+  recordClaim(
+    event,
+    event.params.account,
+    "Email",
+    event.params.emailHash,
+    event.params.hatIds,
+    null,
+    event.params.username,
+    event.params.credentialId
+  );
+}
+
+/**
+ * RegisteredEmailCleared(bytes32 indexed emailHash) — governance freed an address to claim again.
+ *
+ * Creates the row when absent: the module can be told to clear an address that never claimed
+ * through THIS subgraph's indexed range, and recording registered=false is still the truth.
+ */
+export function handleRegisteredEmailCleared(event: RegisteredEmailClearedEvent): void {
+  let moduleAddress = event.address;
+  let module = ZkEmailInvites.load(moduleAddress);
   if (module == null) {
     return;
   }
+
+  let rid = moduleAddress.toHexString() + "-" + event.params.emailHash.toHexString();
+  let reg = ZkEmailRegisteredEmail.load(rid);
+  if (reg == null) {
+    reg = new ZkEmailRegisteredEmail(rid);
+    reg.module = moduleAddress;
+    reg.emailHash = event.params.emailHash;
+    reg.claimedAt = null;
+    reg.claimer = null;
+  }
+  reg.registered = false;
+  reg.clearedAt = event.block.timestamp;
+  reg.save();
+
   module.lastUpdatedAt = event.block.timestamp;
+  module.save();
+}
+
+/* ─────────────────── Module wiring ─────────────────── */
+
+function touch(moduleAddress: Bytes, timestamp: BigInt): ZkEmailInvites | null {
+  let module = ZkEmailInvites.load(moduleAddress);
+  if (module == null) {
+    return null;
+  }
+  module.lastUpdatedAt = timestamp;
+  ensureExecutor(module as ZkEmailInvites, moduleAddress);
+  return module;
+}
+
+/**
+ * Resolve the module's executor once, lazily.
+ *
+ * Unlike the verifiers and registries, `executor` has NO event: it is set in initialize() and
+ * has no setter. Reading it therefore requires a contract call — but only ever one, and only
+ * from a wiring handler, which by definition runs at/after initialize(), so the getter is
+ * guaranteed live (calling it from the registration handler would revert, since the proxy is
+ * registered before it is initialized).
+ *
+ * This matters because the module's executor is what actually gates setActiveAllowlist. It is
+ * normally the org's Executor, but a module installed against a different one — or an executor
+ * rotation — makes every governance proposal to update the allowlist unexecutable, and that is
+ * invisible without this field.
+ */
+function ensureExecutor(module: ZkEmailInvites, moduleAddress: Bytes): void {
+  if (module.executor !== null) {
+    return;
+  }
+  let c = ZkEmailInvitesContract.bind(Address.fromBytes(moduleAddress));
+  let executor = c.try_executor();
+  if (!executor.reverted) {
+    module.executor = executor.value;
+  }
+}
+
+export function handleDomainVerifierUpdated(event: DomainVerifierUpdatedEvent): void {
+  let module = touch(event.address, event.block.timestamp);
+  if (module == null) return;
+  module.domainVerifier = event.params.verifier;
+  module.save();
+}
+
+export function handleEmailVerifierUpdated(event: EmailVerifierUpdatedEvent): void {
+  let module = touch(event.address, event.block.timestamp);
+  if (module == null) return;
+  module.emailVerifier = event.params.verifier;
+  module.save();
+}
+
+export function handleDKIMRegistryUpdated(event: DKIMRegistryUpdatedEvent): void {
+  let module = touch(event.address, event.block.timestamp);
+  if (module == null) return;
+  // dkimRegistry is an entity reference, so the row must exist for it to resolve — the registry
+  // dataSource may not have seen an event yet, or may not be configured on this chain at all.
+  ensureDkimRegistry(event.params.registry, event.block.timestamp);
+  module.dkimRegistry = event.params.registry;
+  module.save();
+}
+
+export function handleAccountRegistryUpdated(event: AccountRegistryUpdatedEvent): void {
+  let module = touch(event.address, event.block.timestamp);
+  if (module == null) return;
+  module.accountRegistry = event.params.registry;
+  module.save();
+}
+
+export function handleUniversalFactoryUpdated(event: UniversalFactoryUpdatedEvent): void {
+  let module = touch(event.address, event.block.timestamp);
+  if (module == null) return;
+  module.universalFactory = event.params.factory;
   module.save();
 }
