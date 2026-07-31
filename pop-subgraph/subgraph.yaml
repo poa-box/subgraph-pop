@@ -569,6 +569,8 @@ templates:
         - WearerEligibility
         - VouchConfig
         - Vouch
+        - WearerVouchState
+        - WearerVouchesClearedEvent
         - UserJoinTime
         - VouchingRestrictionEvent
         - HatAutoMintEvent
@@ -600,6 +602,8 @@ templates:
           handler: handleVouched
         - event: VouchRevoked(indexed address,indexed address,indexed uint256,uint32)
           handler: handleVouchRevoked
+        - event: WearerVouchesCleared(indexed address,indexed uint256,indexed address)
+          handler: handleWearerVouchesCleared
         - event: HatClaimed(indexed address,indexed uint256)
           handler: handleHatClaimed
         - event: HatMetadataUpdated(indexed uint256,string,bytes32)

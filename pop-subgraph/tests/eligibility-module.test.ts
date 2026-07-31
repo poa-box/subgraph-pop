@@ -28,14 +28,22 @@ import {
   handleHatCreatedWithEligibility,
   handleDefaultEligibilityUpdated,
   handleRoleApplicationSubmitted,
-  handleRoleApplicationWithdrawn
+  handleRoleApplicationWithdrawn,
+  handleVouchConfigSet,
+  handleVouched,
+  handleVouchRevoked,
+  handleWearerVouchesCleared
 } from "../src/eligibility-module";
 import {
   createHatMetadataUpdatedEvent,
   createHatCreatedWithEligibilityEvent,
   createDefaultEligibilityUpdatedEvent,
   createRoleApplicationSubmittedEvent,
-  createRoleApplicationWithdrawnEvent
+  createRoleApplicationWithdrawnEvent,
+  createVouchConfigSetEvent,
+  createVouchedEvent,
+  createVouchRevokedEvent,
+  createWearerVouchesClearedEvent
 } from "./eligibility-module-utils";
 import {
   Organization,
@@ -51,7 +59,8 @@ import {
   TaskManager,
   Hat,
   Role,
-  RoleApplication
+  RoleApplication,
+  Vouch
 } from "../generated/schema";
 
 /**
@@ -683,5 +692,283 @@ describe("EligibilityModule - RoleApplications", () => {
 
     let applicationId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1001-0x0000000000000000000000000000000000000099";
     assert.fieldEquals("RoleApplication", applicationId, "active", "false");
+  });
+});
+
+/*═══════════════════════════════════ VOUCH EPOCH TRACKING ═══════════════════════════════════
+ *
+ * EligibilityModule invalidates vouches by bumping an epoch counter, never by emitting a
+ * per-vouch event. Counting Vouch rows therefore overcounts after any reconfiguration —
+ * `pop vouch status` would report quorum met while `currentVouchCount()` returns 0. These
+ * tests pin the mirror (VouchConfig.epoch / WearerVouchState) against the contract's own
+ *
+ *     effectiveCount = (wearerVouchEpoch == vouchConfigEpoch) ? currentVouchCount : 0
+ *
+ * Helpers live at module scope: AssemblyScript has no closures, so declaring them inside the
+ * describe() arrow crashes the compiler.
+ */
+
+const VOUCH_MODULE = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+const CLEARED_SENTINEL =
+  "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+const VOUCH_HAT_ID = 1001;
+
+function vouchHat(): BigInt {
+  return BigInt.fromI32(VOUCH_HAT_ID);
+}
+
+function vouchWearer(): Address {
+  return Address.fromString("0x00000000000000000000000000000000000000aa");
+}
+
+function voucherA(): Address {
+  return Address.fromString("0x00000000000000000000000000000000000000b1");
+}
+
+function voucherB(): Address {
+  return Address.fromString("0x00000000000000000000000000000000000000b2");
+}
+
+function vouchAdmin(): Address {
+  return Address.fromString("0x00000000000000000000000000000000000000cc");
+}
+
+function vouchConfigId(): string {
+  return VOUCH_MODULE + "-" + VOUCH_HAT_ID.toString();
+}
+
+function wearerStateId(): string {
+  return VOUCH_MODULE + "-" + VOUCH_HAT_ID.toString() + "-" + vouchWearer().toHexString();
+}
+
+function vouchRowId(voucher: Address): string {
+  return (
+    VOUCH_MODULE +
+    "-" +
+    VOUCH_HAT_ID.toString() +
+    "-" +
+    vouchWearer().toHexString() +
+    "-" +
+    voucher.toHexString()
+  );
+}
+
+/** Enable vouching with the given quorum. Each call is one on-chain epoch bump. */
+function configureVouching(quorum: i32, logIndex: i32): void {
+  let event = createVouchConfigSetEvent(
+    vouchHat(),
+    BigInt.fromI32(quorum),
+    BigInt.fromI32(2000),
+    quorum > 0,
+    false
+  );
+  event.logIndex = BigInt.fromI32(logIndex);
+  handleVouchConfigSet(event);
+}
+
+function castVouch(voucher: Address, newCount: i32, logIndex: i32): void {
+  let event = createVouchedEvent(voucher, vouchWearer(), vouchHat(), BigInt.fromI32(newCount));
+  event.logIndex = BigInt.fromI32(logIndex);
+  handleVouched(event);
+}
+
+function clearVouches(logIndex: i32): string {
+  let event = createWearerVouchesClearedEvent(vouchWearer(), vouchHat(), vouchAdmin());
+  event.logIndex = BigInt.fromI32(logIndex);
+  handleWearerVouchesCleared(event);
+  return event.transaction.hash.concatI32(logIndex).toHexString();
+}
+
+function vouchIsRevoked(voucher: Address): boolean {
+  return !!Vouch.load(vouchRowId(voucher))!.revokedAt;
+}
+
+function vouchIsInvalidated(voucher: Address): boolean {
+  return !!Vouch.load(vouchRowId(voucher))!.invalidatedAt;
+}
+
+describe("Vouch epoch tracking", () => {
+  afterEach(() => {
+    clearStore();
+  });
+
+  test("VouchConfigSet starts the epoch at 1 and bumps it on every reconfiguration", () => {
+    setupEligibilityModuleEntities();
+
+    configureVouching(2, 1);
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "1");
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "quorum", "2");
+
+    configureVouching(3, 2);
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "2");
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "quorum", "3");
+  });
+
+  test("Vouched mirrors the contract tally onto WearerVouchState at the current epoch", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+
+    castVouch(voucherA(), 1, 2);
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "cleared", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "epoch", "1");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "true");
+
+    castVouch(voucherB(), 2, 3);
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "2");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+  });
+
+  test("reconfiguring strands the wearer on a stale epoch so quorum is NOT met", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+
+    // Quorum of 2 is met under epoch 1.
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "2");
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "1");
+
+    // configureVouching bumps vouchConfigEpoch; on chain currentVouchCount() now returns 0.
+    configureVouching(2, 4);
+
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "2");
+    // The raw tally is untouched (it mirrors currentVouchCount storage) ...
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "2");
+    // ... but its epoch no longer matches, which is what makes the effective count 0.
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+    // THE REGRESSION: counting active Vouch rows said 2 (quorum met) while the contract
+    // says 0. The materialised field is re-swept on the epoch bump so it agrees.
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "0");
+
+    // Consumers that filter on isActive must also see the vouches die.
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "false");
+    // Invalidated by reconfiguration, NOT revoked by the voucher — the two stay distinct.
+    assert.assertTrue(!vouchIsRevoked(voucherA()));
+    assert.assertTrue(vouchIsInvalidated(voucherA()));
+  });
+
+  test("resetVouches (quorum 0) bumps the epoch and invalidates too", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(1, 1);
+    castVouch(voucherA(), 1, 2);
+
+    // resetVouches emits VouchConfigSet(hatId, 0, 0, false, false).
+    configureVouching(0, 3);
+
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "2");
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "enabled", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "0");
+  });
+
+  test("vouching after a reconfiguration restarts the tally at the new epoch", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+    configureVouching(2, 4);
+
+    // vouchFor lazily zeroes the stale count, so the contract emits newCount = 1.
+    castVouch(voucherA(), 1, 5);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "2");
+    // The resurrected row is live again and carries no stale terminal markers.
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "true");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "epoch", "2");
+    assert.assertTrue(!vouchIsInvalidated(voucherA()));
+    // The voucher who did NOT re-vouch stays dead.
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "false");
+  });
+
+  test("VouchRevoked decrements the mirrored tally", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+
+    let revoke = createVouchRevokedEvent(
+      voucherB(),
+      vouchWearer(),
+      vouchHat(),
+      BigInt.fromI32(1)
+    );
+    revoke.logIndex = BigInt.fromI32(4);
+    handleVouchRevoked(revoke);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "false");
+    assert.assertTrue(vouchIsRevoked(voucherB()));
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "true");
+  });
+
+  test("clearWearerVouches parks the wearer on the sentinel epoch and kills their vouches", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+
+    let eventId = clearVouches(4);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "0");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "0");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", CLEARED_SENTINEL);
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "cleared", "true");
+
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "false");
+    assert.assertTrue(vouchIsInvalidated(voucherA()));
+
+    // The config epoch is untouched — only this wearer was cleared.
+    assert.fieldEquals("VouchConfig", vouchConfigId(), "epoch", "1");
+
+    assert.fieldEquals("WearerVouchesClearedEvent", eventId, "clearedCount", "2");
+    assert.fieldEquals(
+      "WearerVouchesClearedEvent",
+      eventId,
+      "admin",
+      vouchAdmin().toHexString()
+    );
+  });
+
+  test("clearing an already-stale wearer records a cleared count of 0", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+    // Reconfiguration already made the effective count 0.
+    configureVouching(2, 4);
+
+    let eventId = clearVouches(5);
+
+    assert.fieldEquals("WearerVouchesClearedEvent", eventId, "clearedCount", "0");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", CLEARED_SENTINEL);
+  });
+
+  test("a cleared wearer's tally restarts when a new voucher vouches", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    clearVouches(3);
+
+    // A voucher who had not yet vouched this epoch can still vouch; the contract resets the
+    // sentinel tally to 0 and emits newCount = 1.
+    castVouch(voucherB(), 1, 4);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "count", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "cleared", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "true");
+    // The cleared voucher stays dead until the config epoch moves.
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
   });
 });

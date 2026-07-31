@@ -82,6 +82,7 @@ type User @entity(immutable: false) {
   wearerEligibilities: [WearerEligibility!]! @derivedFrom(field: "wearerUser")
   vouchesGiven: [Vouch!]! @derivedFrom(field: "voucherUser")
   vouchesReceived: [Vouch!]! @derivedFrom(field: "wearerUser")
+  vouchStates: [WearerVouchState!]! @derivedFrom(field: "wearerUser")
   hatsMintedEvents: [HatsMintedEvent!]! @derivedFrom(field: "recipientUser")
   vouchingRestrictions: [VouchingRestrictionEvent!]! @derivedFrom(field: "userUser")
   hatAutoMints: [HatAutoMintEvent!]! @derivedFrom(field: "wearerUser")
@@ -813,6 +814,11 @@ type VouchConfig @entity(immutable: false) {
   membershipHatId: BigInt!
   enabled: Boolean!
   combinesWithHierarchy: Boolean!
+  # Mirror of the on-chain `vouchConfigEpoch[hatId]` counter. The contract bumps it in
+  # configureVouching / batchConfigureVouching / resetVouches — each of which emits exactly
+  # one VouchConfigSet — so counting those events reproduces the epoch boundaries exactly.
+  # A vouch only counts toward quorum when its `epoch` equals this value.
+  epoch: BigInt!
   # Default eligibility settings (synced from Hat entity via DefaultEligibilityUpdated event)
   defaultEligible: Boolean!
   defaultStanding: Boolean!
@@ -820,12 +826,14 @@ type VouchConfig @entity(immutable: false) {
   updatedAtBlock: BigInt!
   transactionHash: Bytes!
   vouches: [Vouch!]! @derivedFrom(field: "vouchConfig")
+  wearerStates: [WearerVouchState!]! @derivedFrom(field: "vouchConfig")
 }
 
 type Vouch @entity(immutable: false) {
   id: String! # eligibilityModule-hatId-wearer-voucher
   eligibilityModule: EligibilityModuleContract!
   vouchConfig: VouchConfig!
+  wearerVouchState: WearerVouchState!
   wearerEligibility: WearerEligibility!
   hatId: BigInt!
   wearer: Bytes!
@@ -835,11 +843,71 @@ type Vouch @entity(immutable: false) {
   voucherUser: User
   voucherUsername: String
   vouchCount: Int! # current count after this vouch
-  isActive: Boolean! # false if revoked
+  # Mirror of the on-chain `voucherRecordEpoch[hatId][wearer][voucher]`: the VouchConfig
+  # epoch this vouch was cast under. A vouch from a prior epoch is dead on chain even
+  # though it was never explicitly revoked.
+  epoch: BigInt!
+  # false once the vouch stops counting — either revoked by the voucher (revokedAt set)
+  # or invalidated by an epoch bump / clearWearerVouches (invalidatedAt set).
+  isActive: Boolean!
   createdAt: BigInt!
   createdAtBlock: BigInt!
   revokedAt: BigInt
   revokedAtBlock: BigInt
+  invalidatedAt: BigInt
+  invalidatedAtBlock: BigInt
+  transactionHash: Bytes!
+}
+
+# Exact mirror of the contract's per-(hat, wearer) vouch tally, so consumers never have to
+# re-derive it by counting Vouch rows (which silently overcounts across epochs and is capped
+# at one Graph page). Reproduces `currentVouchCount(hatId, wearer)`:
+#
+#     effectiveCount = (state.epoch == vouchConfig.epoch) ? state.count : 0
+#
+type WearerVouchState @entity(immutable: false) {
+  id: String! # eligibilityModule-hatId-wearer
+  eligibilityModule: EligibilityModuleContract!
+  vouchConfig: VouchConfig!
+  hat: Hat!
+  hatId: BigInt!
+  wearer: Bytes!
+  wearerUser: User
+  wearerUsername: String
+  # Raw `currentVouchCount[hatId][wearer]` storage — NOT epoch-filtered. Compare `epoch`
+  # against the config's epoch before trusting it.
+  count: Int!
+  # What the contract's `currentVouchCount(hatId, wearer)` getter returns: `count` when the
+  # epochs agree, 0 otherwise. Maintained on every write and re-swept when the config epoch
+  # moves, so consumers can read quorum progress off a single field. `count` + `epoch` remain
+  # the self-correcting source of truth for anyone who wants to check this.
+  effectiveCount: Int!
+  # Mirror of `wearerVouchEpoch[hatId][wearer]`. After clearWearerVouches this is the
+  # contract's sentinel (2^256 - 1), which can never equal a config epoch.
+  epoch: BigInt!
+  # True while `epoch` holds the clearWearerVouches sentinel (reset by the next vouch).
+  cleared: Boolean!
+  updatedAt: BigInt!
+  updatedAtBlock: BigInt!
+  transactionHash: Bytes!
+  # Bounded by the number of distinct vouchers for this (hat, wearer) — the set
+  # clearWearerVouches has to invalidate.
+  vouches: [Vouch!]! @derivedFrom(field: "wearerVouchState")
+}
+
+type WearerVouchesClearedEvent @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  eligibilityModule: EligibilityModuleContract!
+  wearer: Bytes!
+  wearerUser: User
+  wearerUsername: String
+  hatId: BigInt!
+  hat: Hat
+  admin: Bytes!
+  # Effective vouch count destroyed by the clear (0 if it was already stale).
+  clearedCount: Int!
+  clearedAt: BigInt!
+  clearedAtBlock: BigInt!
   transactionHash: Bytes!
 }
 
