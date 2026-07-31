@@ -93,6 +93,7 @@ type User @entity(immutable: false) {
   totalTasksCompleted: BigInt!
   totalTasksCancelled: BigInt!
   totalTasksLostToExpiry: BigInt!
+  totalTasksReleased: BigInt! # tasks voluntarily handed back via unclaimTask (v7)
   totalModulesCompleted: BigInt!
   totalClaimsAmount: BigInt!
   totalPaymentsAmount: BigInt!
@@ -360,9 +361,13 @@ type Task @entity(immutable: false) {
   absoluteDeadline: BigInt # unix seconds cutoff; null = unset (0 on-chain)
   claimDeadline: BigInt # current claim's deadline (unix seconds), recomputed per claim/assign/approve/reject; null = none
   reclaimCount: Int! # number of expired-claim takeovers (TaskClaimExpired events)
+  # ---- Claim release (TaskManager v7) ----
+  releaseCount: Int! # number of unclaimTask releases back to the pool (TaskUnclaimed events)
+  lastReleasedAt: BigInt # timestamp of the most recent release; null if never released
   applications: [TaskApplication!]! @derivedFrom(field: "task")
   rejections: [TaskRejection!]! @derivedFrom(field: "task")
   claimExpiries: [TaskClaimExpiry!]! @derivedFrom(field: "task")
+  releases: [TaskRelease!]! @derivedFrom(field: "task")
 }
 
 """
@@ -440,6 +445,27 @@ type TaskClaimExpiry @entity(immutable: true) {
   newClaimerUser: User
   expiredAt: BigInt!
   expiredAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Immutable record of a claimed task being released back to the pool (TaskManager v7,
+unclaimTask). Unlike TaskClaimExpiry no replacement claimer is named: the task returns
+to Open with no assignee. `selfRelease` is true when the claimer gave the task back
+themselves, false when an ASSIGN holder released an already-expired claim.
+"""
+type TaskRelease @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  task: Task!
+  previousClaimer: Bytes!
+  previousClaimerUsername: String
+  previousClaimerUser: User
+  caller: Bytes!
+  callerUsername: String
+  callerUser: User
+  selfRelease: Boolean! # caller == previousClaimer
+  releasedAt: BigInt!
+  releasedAtBlock: BigInt!
   transactionHash: Bytes!
 }
 

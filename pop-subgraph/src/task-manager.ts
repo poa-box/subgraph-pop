@@ -22,7 +22,8 @@ import {
   RolePermSet,
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
-  TaskClaimExpired
+  TaskClaimExpired,
+  TaskUnclaimed
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
@@ -41,7 +42,8 @@ import {
   TaskApplicationMetadata,
   ProjectMetadata,
   TaskRejection,
-  TaskClaimExpiry
+  TaskClaimExpiry,
+  TaskRelease
 } from "../generated/schema";
 import { getUsernameForAddress, loadExistingUser } from "./utils";
 
@@ -227,6 +229,7 @@ export function handleTaskCreated(event: TaskCreated): void {
   task.status = "Open";
   task.rejectionCount = 0;
   task.reclaimCount = 0; // deadline fields stay null until TaskDeadlinesSet (v6)
+  task.releaseCount = 0; // v7: incremented per TaskUnclaimed
   task.createdAt = event.block.timestamp;
   task.createdAtBlock = event.block.number;
 
@@ -995,4 +998,85 @@ export function handleTaskClaimExpired(event: TaskClaimExpired): void {
   }
 
   expiry.save();
+}
+
+/**
+ * Handles TaskUnclaimed (TaskManager v7) — the claimer gave the task back, or an ASSIGN
+ * holder released an already-expired claim. Unlike TaskClaimExpired no replacement is
+ * named, so this handler owns the whole transition: back to Open with no assignee.
+ *
+ * `assignedAt` is cleared because it tracks the CURRENT claim's start (handleTaskClaimed /
+ * handleTaskAssigned overwrite it) — leaving it set would show an Open task as assigned at
+ * some past time. The history lives in TaskRelease.
+ *
+ * claimDeadline is cleared defensively: a TaskClaimDeadlineSet(id, 0) follows in the same
+ * tx whenever a window was actually running, but not when the task was windowless.
+ *
+ * Budgets and applications are deliberately untouched on-chain, so nothing to mirror here.
+ */
+export function handleTaskUnclaimed(event: TaskUnclaimed): void {
+  let taskEntityId = event.address.toHexString() + "-" + event.params.id.toString();
+  let task = Task.load(taskEntityId);
+  if (!task) return;
+
+  let selfRelease = event.params.caller.equals(event.params.previousClaimer);
+
+  task.assignee = null;
+  task.assigneeUsername = null;
+  task.assigneeUser = null;
+  task.assignedAt = null;
+  task.claimDeadline = null;
+  task.status = "Open";
+  task.releaseCount = task.releaseCount + 1;
+  task.lastReleasedAt = event.block.timestamp;
+  task.save();
+
+  let releaseId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let release = new TaskRelease(releaseId);
+  release.task = taskEntityId;
+  release.previousClaimer = event.params.previousClaimer;
+  release.previousClaimerUsername = getUsernameForAddress(event.params.previousClaimer);
+  release.caller = event.params.caller;
+  release.callerUsername = getUsernameForAddress(event.params.caller);
+  release.selfRelease = selfRelease;
+  release.releasedAt = event.block.timestamp;
+  release.releasedAtBlock = event.block.number;
+  release.transactionHash = event.transaction.hash;
+
+  let taskManager = TaskManager.load(event.address);
+  if (taskManager) {
+    let prevUser = loadExistingUser(
+      taskManager.organization,
+      event.params.previousClaimer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (prevUser) {
+      release.previousClaimerUser = prevUser.id;
+      // A voluntary hand-back is a release; a third-party release is a loss to expiry (route B
+      // only fires on an expired claim). unclaimTask emits NO TaskClaimExpired — it names no
+      // replacement claimer — so this is the only place that loss can be counted.
+      if (selfRelease) {
+        prevUser.totalTasksReleased = prevUser.totalTasksReleased.plus(BigInt.fromI32(1));
+      } else {
+        prevUser.totalTasksLostToExpiry = prevUser.totalTasksLostToExpiry.plus(BigInt.fromI32(1));
+      }
+      prevUser.save();
+    }
+    if (selfRelease) {
+      release.callerUser = release.previousClaimerUser;
+    } else {
+      let callerUser = loadExistingUser(
+        taskManager.organization,
+        event.params.caller,
+        event.block.timestamp,
+        event.block.number
+      );
+      if (callerUser) {
+        release.callerUser = callerUser.id;
+      }
+    }
+  }
+
+  release.save();
 }

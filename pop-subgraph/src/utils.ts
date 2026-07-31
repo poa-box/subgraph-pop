@@ -64,6 +64,7 @@ export function createUserOnJoin(
     user.totalTasksCompleted = BigInt.fromI32(0);
     user.totalTasksCancelled = BigInt.fromI32(0);
     user.totalTasksLostToExpiry = BigInt.fromI32(0);
+    user.totalTasksReleased = BigInt.fromI32(0);
     user.totalModulesCompleted = BigInt.fromI32(0);
     user.totalClaimsAmount = BigInt.fromI32(0);
     user.totalPaymentsAmount = BigInt.fromI32(0);
@@ -510,6 +511,7 @@ export function applyHatTransferAdd(
     user.totalTasksCompleted = BigInt.fromI32(0);
     user.totalTasksCancelled = BigInt.fromI32(0);
     user.totalTasksLostToExpiry = BigInt.fromI32(0);
+    user.totalTasksReleased = BigInt.fromI32(0);
     user.totalModulesCompleted = BigInt.fromI32(0);
     user.totalClaimsAmount = BigInt.fromI32(0);
     user.totalPaymentsAmount = BigInt.fromI32(0);
