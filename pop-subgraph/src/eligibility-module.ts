@@ -507,10 +507,46 @@ export function handleDefaultEligibilityUpdated(
  * equality relation that actually decides the answer is preserved.
  */
 
-/** The contract's `type(uint256).max` sentinel for a cleared wearer (never equals an epoch). */
-const CLEARED_EPOCH_SENTINEL = BigInt.fromString(
-  "115792089237316195423570985008687907853269984665640564039457584007913129639935"
-);
+/**
+ * The contract's `type(uint256).max` sentinel for a cleared wearer (never equals an epoch).
+ *
+ * MUST NOT be a module-level `const` initialised by `BigInt.fromString`. That is what
+ * shipped in #199 and it indexed zero blocks.
+ *
+ * graph-cli builds with `--explicitStart`, so there is no wasm start SECTION; AssemblyScript
+ * emits `~start` and exports it as `_start`, which graph-node calls once per WasmInstance —
+ * per trigger — in runtime/wasm/src/module/instance.rs, after the AscHeap is installed.
+ *
+ * Inside `~start`, AssemblyScript sets the stub allocator's bump cursor
+ * (`~lib/rt/stub/offset`, static init 0) LAST, after the user globals. `bigInt.fromString`
+ * is a host import, so the global ran with that cursor still at 0: returning the value made
+ * the host call back into the exported allocator, which handed out an arena starting near
+ * address 0 — on top of the static data segment, where the string literals live. The next
+ * `asc_new` zeroed the rtSize header of "EligibilityModuleContract", and `store.set` read
+ * its entity type back as EMPTY:
+ *
+ *   handleEligibilityModuleInitialized: internal error: unknown name  when looking
+ *   up entity type
+ *
+ * (note the two spaces). Nothing was wrong with that handler — the corruption is
+ * instance-wide and happens before any handler runs, so the blame lands on whichever one
+ * went first. Disassembling the two builds shows it exactly: the broken `~start` is
+ * `call <bigInt.fromString>; global.set <sentinel>; i32.const 24204; global.set <offset>`,
+ * the fixed one has no `call` at all.
+ *
+ * Built from bytes here, which is pure AssemblyScript (`ByteArray.fromHexString` and
+ * `BigInt.fromUnsignedBytes` reach no host import), so it stays safe even if a future
+ * refactor hoists it back to module scope. 32 x 0xff is byte-order agnostic, so the
+ * little-endian convention of `fromUnsignedBytes` does not matter, and `fromUnsignedBytes`
+ * appends the 0x00 sign byte that keeps it positive.
+ *
+ * scripts/check-wasm-start.mjs gates this class of bug in CI.
+ */
+function clearedEpochSentinel(): BigInt {
+  return BigInt.fromUnsignedBytes(
+    Bytes.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+  );
+}
 
 function vouchConfigIdFor(module: Address, hatId: BigInt): string {
   return module.toHexString() + "-" + hatId.toString();
@@ -805,15 +841,16 @@ export function handleWearerVouchesCleared(event: WearerVouchesClearedEvent): vo
   let configEpoch = currentVouchEpoch(contractAddress, hatId);
   let wearerState = getOrCreateWearerVouchState(contractAddress, hatId, wearer, event);
   let clearedCount = effectiveVouchCount(wearerState, configEpoch);
+  let sentinel = clearedEpochSentinel();
 
   wearerState.count = 0;
-  wearerState.epoch = CLEARED_EPOCH_SENTINEL;
+  wearerState.epoch = sentinel;
   wearerState.cleared = true;
   saveWearerVouchState(wearerState, configEpoch, event);
 
   // Bounded by the number of distinct vouchers for this (hat, wearer). The sentinel epoch
   // can never equal a real one, so every still-active row here is invalidated.
-  invalidateVouches(wearerState.vouches.load(), CLEARED_EPOCH_SENTINEL, event);
+  invalidateVouches(wearerState.vouches.load(), sentinel, event);
 
   let cleared = new WearerVouchesClearedEventEntity(
     event.transaction.hash.concatI32(event.logIndex.toI32())

@@ -13,7 +13,35 @@ on:
       - 'peer-cashoutrelay-base/**'
 
 jobs:
+  # A module-level global initialised by a host call makes graph-node's allocator hand out
+  # an arena on top of the static data segment, so string literals read back empty and
+  # indexing dies on the first trigger — blamed on an unrelated handler. It compiles, it
+  # passes matchstick and it passes subgraph-lint, so it needs its own gate. This checks the
+  # built artifact rather than the source, which is why indirection cannot slip past it.
+  # See scripts/check-wasm-start.mjs.
+  wasm-start-guard:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [pop-subgraph, peer-cashoutrelay-base]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: ${{ matrix.dir }}/yarn.lock
+      - run: yarn install --frozen-lockfile
+        working-directory: ${{ matrix.dir }}
+      - run: yarn codegen
+        working-directory: ${{ matrix.dir }}
+      - run: yarn build
+        working-directory: ${{ matrix.dir }}
+      - run: node ../scripts/check-wasm-start.mjs build
+        working-directory: ${{ matrix.dir }}
+
   subgraph-arbitrum-one:
+    needs: wasm-start-guard
     uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
     with:
       subgraph-name: poa-arb-v-1
@@ -23,6 +51,7 @@ jobs:
       GRAPH_DEPLOY_KEY: ${{ secrets.GRAPH_DEPLOY_KEY }}
 
   subgraph-gnosis:
+    needs: wasm-start-guard
     uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
     with:
       subgraph-name: poa-gnosis-v-1
@@ -33,6 +62,7 @@ jobs:
       GRAPH_DEPLOY_KEY: ${{ secrets.GRAPH_DEPLOY_KEY }}
 
   subgraph-base:
+    needs: wasm-start-guard
     uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
     with:
       subgraph-name: peer-cashoutrelay-base
