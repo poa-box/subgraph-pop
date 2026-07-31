@@ -56,6 +56,35 @@ dataSources:
         - event: InfrastructureDeployed(address,address,address,address,address,address)
           handler: handleInfrastructureDeployed
       file: ./src/poa-manager.ts
+  # The only on-chain mapping from an implementation ADDRESS back to its human version string.
+  # Modules expose no version() getter and getImplementation() takes the version as input, so
+  # without this dataSource the answer is only reachable via an unbounded eth_getLogs, which most
+  # public RPCs reject.
+  - kind: ethereum
+    name: ImplementationRegistry
+    network: arbitrum-one
+    source:
+      abi: ImplementationRegistry
+      address: "0x5e5F4269ef727FFDE6A62509C27A7C6c0D39dBB9"
+      startBlock: 447059849
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - ImplementationRegistryContract
+        - ImplementationType
+        - ImplementationVersion
+        - ImplementationRegistration
+      abis:
+        - name: ImplementationRegistry
+          file: ./abis/ImplementationRegistry.json
+      eventHandlers:
+        - event: ImplementationRegistered(indexed bytes32,string,indexed bytes32,string,address,bool)
+          handler: handleImplementationRegistered
+        - event: OwnershipTransferred(indexed address,indexed address)
+          handler: handleImplementationRegistryOwnershipTransferred
+      file: ./src/implementation-registry.ts
   - kind: ethereum
     name: PoaManagerHub
     network: arbitrum-one
@@ -1017,6 +1046,34 @@ templates:
         - event: OwnershipTransferred(indexed address,indexed address)
           handler: handleDkimOwnershipTransferred
       file: ./src/poa-dkim-registry.ts
+  # PoaManager.setRegistry can repoint governance at a freshly deployed ImplementationRegistry.
+  # The static ImplementationRegistry dataSource only watches the address known when this
+  # manifest was written, so handleRegistryUpdated spawns this template for any registry it has
+  # not seen before. Safe to overlap with the static source: handleImplementationRegistered drops
+  # any log whose txHash+logIndex it already recorded, so counters cannot be double-incremented.
+  - kind: ethereum
+    name: ImplementationRegistryDynamic
+    network: arbitrum-one
+    source:
+      abi: ImplementationRegistry
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - ImplementationRegistryContract
+        - ImplementationType
+        - ImplementationVersion
+        - ImplementationRegistration
+      abis:
+        - name: ImplementationRegistry
+          file: ./abis/ImplementationRegistry.json
+      eventHandlers:
+        - event: ImplementationRegistered(indexed bytes32,string,indexed bytes32,string,address,bool)
+          handler: handleImplementationRegistered
+        - event: OwnershipTransferred(indexed address,indexed address)
+          handler: handleImplementationRegistryOwnershipTransferred
+      file: ./src/implementation-registry.ts
   - kind: file/ipfs
     name: OrgMetadata
     network: arbitrum-one
