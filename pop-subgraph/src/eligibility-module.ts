@@ -545,7 +545,6 @@ function getOrCreateWearerVouchState(
     state.hat = module.toHexString() + "-" + hatId.toString();
     state.hatId = hatId;
     state.wearer = wearer;
-    state.wearerUsername = getUsernameForAddress(wearer);
     state.count = 0;
     state.effectiveCount = 0;
     state.epoch = BigInt.fromI32(0);
@@ -564,6 +563,9 @@ function getOrCreateWearerVouchState(
       }
     }
   }
+  // Refreshed on every real vouch/revoke/clear. Deliberately NOT done in the epoch
+  // sweep, which reaches states through the loader and must not touch unrelated wearers.
+  state.wearerUsername = getUsernameForAddress(wearer);
   return state;
 }
 
