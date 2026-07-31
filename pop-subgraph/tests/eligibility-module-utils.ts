@@ -5,7 +5,11 @@ import {
   HatCreatedWithEligibility,
   DefaultEligibilityUpdated,
   RoleApplicationSubmitted,
-  RoleApplicationWithdrawn
+  RoleApplicationWithdrawn,
+  VouchConfigSet,
+  Vouched,
+  VouchRevoked,
+  WearerVouchesCleared
 } from "../generated/templates/EligibilityModule/EligibilityModule";
 
 export function createHatMetadataUpdatedEvent(
@@ -120,6 +124,106 @@ export function createRoleApplicationWithdrawnEvent(
   );
   event.parameters.push(
     new ethereum.EventParam("applicant", ethereum.Value.fromAddress(applicant))
+  );
+
+  return event;
+}
+
+export function createVouchConfigSetEvent(
+  hatId: BigInt,
+  quorum: BigInt,
+  membershipHatId: BigInt,
+  enabled: boolean,
+  combineWithHierarchy: boolean
+): VouchConfigSet {
+  let event = changetype<VouchConfigSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("quorum", ethereum.Value.fromUnsignedBigInt(quorum))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("membershipHatId", ethereum.Value.fromUnsignedBigInt(membershipHatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("enabled", ethereum.Value.fromBoolean(enabled))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("combineWithHierarchy", ethereum.Value.fromBoolean(combineWithHierarchy))
+  );
+
+  return event;
+}
+
+export function createVouchedEvent(
+  voucher: Address,
+  wearer: Address,
+  hatId: BigInt,
+  newCount: BigInt
+): Vouched {
+  let event = changetype<Vouched>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("voucher", ethereum.Value.fromAddress(voucher))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("newCount", ethereum.Value.fromUnsignedBigInt(newCount))
+  );
+
+  return event;
+}
+
+export function createVouchRevokedEvent(
+  voucher: Address,
+  wearer: Address,
+  hatId: BigInt,
+  newCount: BigInt
+): VouchRevoked {
+  let event = changetype<VouchRevoked>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("voucher", ethereum.Value.fromAddress(voucher))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("newCount", ethereum.Value.fromUnsignedBigInt(newCount))
+  );
+
+  return event;
+}
+
+export function createWearerVouchesClearedEvent(
+  wearer: Address,
+  hatId: BigInt,
+  admin: Address
+): WearerVouchesCleared {
+  let event = changetype<WearerVouchesCleared>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("admin", ethereum.Value.fromAddress(admin))
   );
 
   return event;

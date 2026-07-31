@@ -1,4 +1,4 @@
-import { Address, BigInt, Bytes, DataSourceContext, log } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, DataSourceContext, ethereum, log } from "@graphprotocol/graph-ts";
 import { HatMetadata as HatMetadataTemplate } from "../generated/templates";
 import { Hats } from "../generated/Hats/Hats";
 import {
@@ -10,6 +10,7 @@ import {
   VouchConfigSet as VouchConfigSetEvent,
   Vouched as VouchedEvent,
   VouchRevoked as VouchRevokedEvent,
+  WearerVouchesCleared as WearerVouchesClearedEvent,
   HatClaimed as HatClaimedEvent,
   HatMetadataUpdated as HatMetadataUpdatedEvent,
   UserJoinTimeSet as UserJoinTimeSetEvent,
@@ -32,6 +33,8 @@ import {
   WearerEligibility,
   VouchConfig,
   Vouch,
+  WearerVouchState,
+  WearerVouchesClearedEvent as WearerVouchesClearedEventEntity,
   UserJoinTime,
   VouchingRestrictionEvent,
   HatAutoMintEvent,
@@ -482,11 +485,145 @@ export function handleDefaultEligibilityUpdated(
   }
 }
 
+/*═══════════════════════════════════ VOUCH EPOCH TRACKING ═══════════════════════════════════
+ *
+ * EligibilityModule keeps three epoch maps that make stale vouch data dead WITHOUT ever
+ * emitting a per-vouch invalidation:
+ *
+ *   vouchConfigEpoch[hatId]                    bumped by configureVouching /
+ *                                              batchConfigureVouching / resetVouches
+ *   wearerVouchEpoch[hatId][wearer]            epoch the wearer's tally belongs to
+ *   voucherRecordEpoch[hatId][wearer][voucher] epoch an individual vouch was cast under
+ *
+ * and `currentVouchCount(hatId, wearer)` returns 0 whenever the first two disagree.
+ *
+ * Counting Vouch rows therefore OVERCOUNTS: a hat reconfigured after ten members vouched
+ * still has ten isActive rows while the contract reports zero.
+ *
+ * Each of the three epoch bumps emits exactly one VouchConfigSet, so `VouchConfig.epoch`
+ * below reproduces the epoch BOUNDARIES exactly by counting those events. The absolute
+ * number can differ from the chain's (if the module were configured before this data
+ * source existed), but every comparison is subgraph-epoch vs subgraph-epoch, so the
+ * equality relation that actually decides the answer is preserved.
+ */
+
+/** The contract's `type(uint256).max` sentinel for a cleared wearer (never equals an epoch). */
+const CLEARED_EPOCH_SENTINEL = BigInt.fromString(
+  "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+);
+
+function vouchConfigIdFor(module: Address, hatId: BigInt): string {
+  return module.toHexString() + "-" + hatId.toString();
+}
+
+function wearerVouchStateIdFor(module: Address, hatId: BigInt, wearer: Address): string {
+  return module.toHexString() + "-" + hatId.toString() + "-" + wearer.toHexString();
+}
+
+/**
+ * Current epoch for a hat. A missing VouchConfig means no VouchConfigSet has been observed,
+ * which on chain means `vouchConfigEpoch` is still 0 — so 0 is the honest answer, and the
+ * first VouchConfigSet will bump past it and correctly invalidate anything recorded here.
+ */
+function currentVouchEpoch(module: Address, hatId: BigInt): BigInt {
+  let config = VouchConfig.load(vouchConfigIdFor(module, hatId));
+  return config == null ? BigInt.fromI32(0) : config.epoch;
+}
+
+function getOrCreateWearerVouchState(
+  module: Address,
+  hatId: BigInt,
+  wearer: Address,
+  event: ethereum.Event
+): WearerVouchState {
+  let id = wearerVouchStateIdFor(module, hatId, wearer);
+  let state = WearerVouchState.load(id);
+  if (state == null) {
+    state = new WearerVouchState(id);
+    state.eligibilityModule = module;
+    state.vouchConfig = vouchConfigIdFor(module, hatId);
+    state.hat = module.toHexString() + "-" + hatId.toString();
+    state.hatId = hatId;
+    state.wearer = wearer;
+    state.count = 0;
+    state.effectiveCount = 0;
+    state.epoch = BigInt.fromI32(0);
+    state.cleared = false;
+  }
+
+  // RETRIED until it succeeds, not linked once at creation. A wearer does not have to be
+  // a member to be vouched for — vouchFor only gates the VOUCHER on membershipHatId — so
+  // the usual order is "vouches accumulate, quorum reached, wearer claims the hat", and
+  // handleHatClaimed is the join handler that finally creates their User. Linking only on
+  // creation would leave User.vouchStates permanently empty for exactly those wearers.
+  let linkedUser: string | null = state.wearerUser;
+  if (!linkedUser) {
+    let eligibilityModule = EligibilityModuleContract.load(module);
+    if (eligibilityModule) {
+      let wearerUser = loadExistingUser(
+        eligibilityModule.organization,
+        wearer,
+        event.block.timestamp,
+        event.block.number
+      );
+      if (wearerUser) {
+        state.wearerUser = wearerUser.id;
+      }
+    }
+  }
+
+  // Refreshed on every real vouch/revoke/clear. Deliberately NOT done in the epoch
+  // sweep, which reaches states through the loader and must not touch unrelated wearers.
+  state.wearerUsername = getUsernameForAddress(wearer);
+  return state;
+}
+
+/** The contract's epoch-filtered `currentVouchCount(hatId, wearer)`. */
+function effectiveVouchCount(state: WearerVouchState, configEpoch: BigInt): i32 {
+  return state.epoch.equals(configEpoch) ? state.count : 0;
+}
+
+/**
+ * The ONLY way a WearerVouchState is persisted. Recomputing `effectiveCount` here is what
+ * keeps the convenience field in step with the (count, epoch) pair that actually defines the
+ * answer, and stamping here means a sweep-only change still moves `updatedAt`.
+ */
+function saveWearerVouchState(
+  state: WearerVouchState,
+  configEpoch: BigInt,
+  event: ethereum.Event
+): void {
+  state.effectiveCount = effectiveVouchCount(state, configEpoch);
+  state.updatedAt = event.block.timestamp;
+  state.updatedAtBlock = event.block.number;
+  state.transactionHash = event.transaction.hash;
+  state.save();
+}
+
+/**
+ * Mark every still-active vouch in `vouches` as invalidated (as opposed to revoked, which
+ * stays distinguishable via revokedAt). Vouches already cast under `keepEpoch` survive.
+ */
+function invalidateVouches(vouches: Vouch[], keepEpoch: BigInt, event: ethereum.Event): i32 {
+  let invalidated = 0;
+  for (let i = 0; i < vouches.length; i++) {
+    let vouch = vouches[i];
+    if (!vouch.isActive) continue;
+    if (vouch.epoch.equals(keepEpoch)) continue;
+    vouch.isActive = false;
+    vouch.invalidatedAt = event.block.timestamp;
+    vouch.invalidatedAtBlock = event.block.number;
+    vouch.save();
+    invalidated += 1;
+  }
+  return invalidated;
+}
+
 export function handleVouchConfigSet(event: VouchConfigSetEvent): void {
   let contractAddress = event.address;
   let hatId = event.params.hatId;
-  let vouchConfigId = contractAddress.toHexString() + "-" + hatId.toString();
-  let hatEntityId = contractAddress.toHexString() + "-" + hatId.toString();
+  let vouchConfigId = vouchConfigIdFor(contractAddress, hatId);
+  let hatEntityId = vouchConfigId;
 
   let vouchConfig = VouchConfig.load(vouchConfigId);
   if (vouchConfig == null) {
@@ -494,6 +631,7 @@ export function handleVouchConfigSet(event: VouchConfigSetEvent): void {
     vouchConfig.eligibilityModule = contractAddress;
     vouchConfig.hat = hatEntityId;
     vouchConfig.hatId = hatId;
+    vouchConfig.epoch = BigInt.fromI32(0);
     // Initialize defaults from Hat entity if it exists
     let hat = Hat.load(hatEntityId);
     if (hat) {
@@ -506,6 +644,9 @@ export function handleVouchConfigSet(event: VouchConfigSetEvent): void {
     }
   }
 
+  // configureVouching / batchConfigureVouching / resetVouches each bump the on-chain epoch
+  // exactly once per emitted VouchConfigSet.
+  vouchConfig.epoch = vouchConfig.epoch.plus(BigInt.fromI32(1));
   vouchConfig.quorum = i32(event.params.quorum.toI32());
   vouchConfig.membershipHatId = event.params.membershipHatId;
   vouchConfig.enabled = event.params.enabled;
@@ -515,6 +656,30 @@ export function handleVouchConfigSet(event: VouchConfigSetEvent): void {
   vouchConfig.transactionHash = event.transaction.hash;
 
   vouchConfig.save();
+
+  // Every vouch from a prior epoch is now dead on chain even though no per-vouch event was
+  // emitted. Consumers filtering on isActive would otherwise keep counting them.
+  // Every wearer tallied under the old epoch now reads 0 on chain. Re-sweep the
+  // materialised counts so consumers reading `effectiveCount` see it immediately.
+  let wearerStates = vouchConfig.wearerStates.load();
+  for (let i = 0; i < wearerStates.length; i++) {
+    let state = wearerStates[i];
+    if (state.effectiveCount == 0) continue;
+    saveWearerVouchState(state, vouchConfig.epoch, event);
+  }
+
+  let invalidated = invalidateVouches(
+    vouchConfig.vouches.load(),
+    vouchConfig.epoch,
+    event
+  );
+  if (invalidated > 0) {
+    log.info("VouchConfigSet invalidated {} stale vouches for hat {} (epoch {})", [
+      invalidated.toString(),
+      hatId.toString(),
+      vouchConfig.epoch.toString()
+    ]);
+  }
 }
 
 export function handleVouched(event: VouchedEvent): void {
@@ -523,11 +688,24 @@ export function handleVouched(event: VouchedEvent): void {
   let wearer = event.params.wearer;
   let voucher = event.params.voucher;
 
+  // The epoch this vouch is cast under — the contract's voucherRecordEpoch. vouchFor reverts
+  // unless vouching is enabled, so a VouchConfig always exists by now on a healthy index.
+  let epoch = currentVouchEpoch(contractAddress, hatId);
+
+  // Mirror the contract's per-wearer tally. vouchFor lazily zeroes a stale-epoch count before
+  // incrementing, and `newCount` is the authoritative post-transaction value either way.
+  let wearerState = getOrCreateWearerVouchState(contractAddress, hatId, wearer, event);
+  wearerState.count = i32(event.params.newCount.toI32());
+  wearerState.epoch = epoch;
+  wearerState.cleared = false;
+  saveWearerVouchState(wearerState, epoch, event);
+
   let vouchId = contractAddress.toHexString() + "-" + hatId.toString() + "-" + wearer.toHexString() + "-" + voucher.toHexString();
   let vouch = new Vouch(vouchId);
 
   vouch.eligibilityModule = contractAddress;
   vouch.vouchConfig = contractAddress.toHexString() + "-" + hatId.toString();
+  vouch.wearerVouchState = wearerState.id;
   vouch.wearerEligibility = contractAddress.toHexString() + "-" + hatId.toString() + "-" + wearer.toHexString();
   vouch.hatId = hatId;
   vouch.wearer = wearer;
@@ -535,7 +713,15 @@ export function handleVouched(event: VouchedEvent): void {
   vouch.voucher = voucher;
   vouch.voucherUsername = getUsernameForAddress(voucher);
   vouch.vouchCount = i32(event.params.newCount.toI32());
+  vouch.epoch = epoch;
   vouch.isActive = true;
+  // The id is epoch-independent, so this row may be a resurrection of a revoked or
+  // epoch-invalidated vouch. Clear both terminal markers explicitly rather than relying on
+  // store.set replacement semantics.
+  vouch.revokedAt = null;
+  vouch.revokedAtBlock = null;
+  vouch.invalidatedAt = null;
+  vouch.invalidatedAtBlock = null;
 
   // Link to User entities
   let eligibilityModule = EligibilityModuleContract.load(contractAddress);
@@ -576,6 +762,15 @@ export function handleVouchRevoked(event: VouchRevokedEvent): void {
   let wearer = event.params.wearer;
   let voucher = event.params.voucher;
 
+  // revokeVouch only succeeds for a current-epoch record, so the wearer's tally is live and
+  // `newCount` is authoritative. Keep the mirror in step even if the Vouch row is missing.
+  let revokeEpoch = currentVouchEpoch(contractAddress, hatId);
+  let wearerState = getOrCreateWearerVouchState(contractAddress, hatId, wearer, event);
+  wearerState.count = i32(event.params.newCount.toI32());
+  wearerState.epoch = revokeEpoch;
+  wearerState.cleared = false;
+  saveWearerVouchState(wearerState, revokeEpoch, event);
+
   let vouchId = contractAddress.toHexString() + "-" + hatId.toString() + "-" + wearer.toHexString() + "-" + voucher.toHexString();
   let vouch = Vouch.load(vouchId);
 
@@ -590,6 +785,64 @@ export function handleVouchRevoked(event: VouchRevokedEvent): void {
   vouch.revokedAtBlock = event.block.number;
 
   vouch.save();
+}
+
+/**
+ * clearWearerVouches — surgical per-wearer invalidation. On chain it parks
+ * `wearerVouchEpoch[hatId][wearer]` on a sentinel that can never match the config epoch and
+ * zeroes the raw tally, so the wearer's effective count is 0 until somebody vouches again.
+ *
+ * Note the asymmetry with an epoch bump: the contract leaves `vouchers` and
+ * `voucherRecordEpoch` untouched, so a voucher who already vouched THIS epoch can neither
+ * revoke (wearer epoch is the sentinel) nor re-vouch (AlreadyVouched). Their row is dead but
+ * still blocks them, which is why it is marked invalidated rather than deleted.
+ */
+export function handleWearerVouchesCleared(event: WearerVouchesClearedEvent): void {
+  let contractAddress = event.address;
+  let hatId = event.params.hatId;
+  let wearer = event.params.wearer;
+
+  let configEpoch = currentVouchEpoch(contractAddress, hatId);
+  let wearerState = getOrCreateWearerVouchState(contractAddress, hatId, wearer, event);
+  let clearedCount = effectiveVouchCount(wearerState, configEpoch);
+
+  wearerState.count = 0;
+  wearerState.epoch = CLEARED_EPOCH_SENTINEL;
+  wearerState.cleared = true;
+  saveWearerVouchState(wearerState, configEpoch, event);
+
+  // Bounded by the number of distinct vouchers for this (hat, wearer). The sentinel epoch
+  // can never equal a real one, so every still-active row here is invalidated.
+  invalidateVouches(wearerState.vouches.load(), CLEARED_EPOCH_SENTINEL, event);
+
+  let cleared = new WearerVouchesClearedEventEntity(
+    event.transaction.hash.concatI32(event.logIndex.toI32())
+  );
+  cleared.eligibilityModule = contractAddress;
+  cleared.wearer = wearer;
+  cleared.wearerUsername = getUsernameForAddress(wearer);
+  cleared.hatId = hatId;
+  cleared.hat = contractAddress.toHexString() + "-" + hatId.toString();
+  cleared.admin = event.params.admin;
+  cleared.clearedCount = clearedCount;
+  cleared.clearedAt = event.block.timestamp;
+  cleared.clearedAtBlock = event.block.number;
+  cleared.transactionHash = event.transaction.hash;
+
+  let eligibilityModule = EligibilityModuleContract.load(contractAddress);
+  if (eligibilityModule) {
+    let wearerUser = loadExistingUser(
+      eligibilityModule.organization,
+      wearer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (wearerUser) {
+      cleared.wearerUser = wearerUser.id;
+    }
+  }
+
+  cleared.save();
 }
 
 export function handleHatClaimed(event: HatClaimedEvent): void {

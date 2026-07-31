@@ -1686,6 +1686,31 @@
     "anonymous": false
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "wearer",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "hatId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "admin",
+        "type": "address"
+      }
+    ],
+    "name": "WearerVouchesCleared",
+    "type": "event"
+  },
+  {
     "type": "event",
     "name": "VouchingRateLimitExceededEvent",
     "inputs": [
