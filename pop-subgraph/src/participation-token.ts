@@ -47,6 +47,20 @@ export function handleInitialized(event: InitializedEvent): void {
   if (!symbolResult.reverted) {
     contract.symbol = symbolResult.value;
   }
+  // executor and hats are set ONLY inside initialize() — there is no ExecutorUpdated/HatsSet
+  // event and no setter on ParticipationToken, so they are unreachable from logs. org-deployer.ts
+  // seeds both to the zero address with a "will be set by Initialized event" comment describing a
+  // mechanism that does not exist; without these two reads they stay zero forever, which is what
+  // every live row shows. Same current-state try_* mechanism as name/symbol above, which is
+  // already proven in production.
+  let executorResult = bound.try_executor();
+  if (!executorResult.reverted) {
+    contract.executor = executorResult.value;
+  }
+  let hatsResult = bound.try_hats();
+  if (!hatsResult.reverted) {
+    contract.hatsContract = hatsResult.value;
+  }
   contract.save();
 }
 

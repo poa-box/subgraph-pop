@@ -8,6 +8,10 @@
       "address": "0xFF585Fae4A944cD173B19158C6FC5E08980b0815",
       "startBlock": 447059849
     },
+    "ImplementationRegistry": {
+      "address": "0x5e5F4269ef727FFDE6A62509C27A7C6c0D39dBB9",
+      "startBlock": 447059849
+    },
     "PoaManagerHub": {
       "address": "0xB72840B343654eAfb2CFf7acC4Fc6b59E6c3CC71",
       "startBlock": 447060030
@@ -32,6 +36,10 @@
     },
     "PoaManager": {
       "address": "0x794fD39e75140ee1545B1B022E5486B7c863789b",
+      "startBlock": 45407962
+    },
+    "ImplementationRegistry": {
+      "address": "0x72c16812aE2a6819F4d0D9E432A3818712fa5c63",
       "startBlock": 45407962
     },
     "PoaManagerHub": {

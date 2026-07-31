@@ -95,8 +95,14 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   participationToken.name = ""; // Will be set by Initialized event
   participationToken.symbol = ""; // Will be set by Initialized event
   participationToken.totalSupply = BigInt.fromI32(0);
-  participationToken.executor = Address.zero(); // Will be set by Initialized event
-  participationToken.hatsContract = Address.zero(); // Will be set by Initialized event
+  // OrgDeployed carries the very executor that ModuleDeploymentLib hands to
+  // ParticipationToken.initialize(), so seed it exactly and for free instead of relying on a
+  // contract read. ParticipationToken exposes no ExecutorUpdated event and no setter, so the
+  // value is immutable and this one-time seed is complete.
+  participationToken.executor = event.params.executor;
+  // hats is NOT on OrgDeployed and, like executor, has no event and no setter — it is only
+  // readable via the getter, which handleInitialized does with try_hats().
+  participationToken.hatsContract = Address.zero();
   participationToken.createdAt = event.block.timestamp;
   participationToken.createdAtBlock = event.block.number;
 

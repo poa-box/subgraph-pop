@@ -4,9 +4,10 @@ import {
   test,
   clearStore,
   afterEach,
-  beforeEach
+  beforeEach,
+  createMockedFunction
 } from "matchstick-as/assembly/index";
-import { Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
+import { Address, Bytes, BigInt, ethereum } from "@graphprotocol/graph-ts";
 import {
   handleTransfer,
   handleInitialized,
@@ -44,6 +45,9 @@ const USER_1 = Address.fromString("0x0000000000000000000000000000000000000001");
 const USER_2 = Address.fromString("0x0000000000000000000000000000000000000002");
 const USER_3 = Address.fromString("0x0000000000000000000000000000000000000003");
 const ZERO_ADDRESS = Address.fromString("0x0000000000000000000000000000000000000000");
+const EXECUTOR = Address.fromString("0x00000000000000000000000000000000000000e0");
+// The real Hats protocol singleton, shared by Gnosis and Arbitrum.
+const HATS = Address.fromString("0x3bc1A0Ad72417f2d411118085256fC53CBdDd137");
 
 /**
  * Helper function to create a User entity for testing.
@@ -116,6 +120,67 @@ function setupParticipationTokenEntitiesWithUsers(): void {
 describe("ParticipationToken", () => {
   afterEach(() => {
     clearStore();
+  });
+
+  describe("Initialized", () => {
+    // executor and hats are written ONLY inside initialize() — ParticipationToken has no
+    // ExecutorUpdated/HatsSet event and no setter — so the getters are the only way to reach
+    // them. Before this, both non-null fields sat at the zero address on every live row.
+    test("hydrates executor and hats from the getters", () => {
+      setupParticipationTokenEntities();
+
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "name", "name():(string)").returns([
+        ethereum.Value.fromString("Argus Token")
+      ]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "symbol", "symbol():(string)").returns([
+        ethereum.Value.fromString("PT")
+      ]);
+      createMockedFunction(
+        PARTICIPATION_TOKEN_ADDRESS,
+        "executor",
+        "executor():(address)"
+      ).returns([ethereum.Value.fromAddress(EXECUTOR)]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "hats", "hats():(address)").returns([
+        ethereum.Value.fromAddress(HATS)
+      ]);
+
+      handleInitialized(createInitializedEvent(BigInt.fromI32(1), PARTICIPATION_TOKEN_ADDRESS));
+
+      let id = PARTICIPATION_TOKEN_ADDRESS.toHexString();
+      assert.fieldEquals("ParticipationTokenContract", id, "executor", EXECUTOR.toHexString());
+      assert.fieldEquals("ParticipationTokenContract", id, "hatsContract", HATS.toHexString());
+      assert.fieldEquals("ParticipationTokenContract", id, "name", "Argus Token");
+      assert.fieldEquals("ParticipationTokenContract", id, "symbol", "PT");
+    });
+
+    test("a reverting getter leaves the seeded value rather than aborting", () => {
+      // Both fields are non-null in the schema, so a revert must not be allowed to leave the
+      // entity unsaved — the remaining reads still have to land.
+      setupParticipationTokenEntities();
+
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "name", "name():(string)").returns([
+        ethereum.Value.fromString("Argus Token")
+      ]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "symbol", "symbol():(string)").returns([
+        ethereum.Value.fromString("PT")
+      ]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "executor", "executor():(address)").reverts();
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "hats", "hats():(address)").returns([
+        ethereum.Value.fromAddress(HATS)
+      ]);
+
+      handleInitialized(createInitializedEvent(BigInt.fromI32(1), PARTICIPATION_TOKEN_ADDRESS));
+
+      let id = PARTICIPATION_TOKEN_ADDRESS.toHexString();
+      assert.fieldEquals(
+        "ParticipationTokenContract",
+        id,
+        "executor",
+        Address.zero().toHexString()
+      );
+      assert.fieldEquals("ParticipationTokenContract", id, "hatsContract", HATS.toHexString());
+      assert.fieldEquals("ParticipationTokenContract", id, "name", "Argus Token");
+    });
   });
 
   describe("Transfer - Minting (from zero address)", () => {

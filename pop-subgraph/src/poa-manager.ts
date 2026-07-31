@@ -22,6 +22,7 @@ import { OrgRegistry as OrgRegistryTemplate } from "../generated/templates";
 import { PaymasterHub as PaymasterHubTemplate } from "../generated/templates";
 import { UniversalAccountRegistry as UniversalAccountRegistryTemplate } from "../generated/templates";
 import { PasskeyAccountFactory as PasskeyAccountFactoryTemplate } from "../generated/templates";
+import { ensureImplementationRegistry } from "./implementation-registry";
 
 function getOrCreatePoaManager(
   address: Bytes,
@@ -110,6 +111,15 @@ export function handleRegistryUpdated(event: RegistryUpdatedEvent): void {
   );
   poaManager.registry = event.params.newRegistry;
   poaManager.save();
+
+  // Start watching the registry itself, so ImplementationVersion keeps resolving after a
+  // governance repoint to a freshly deployed ImplementationRegistry. No-op when the address is
+  // already known (including the one hard-wired as a static dataSource).
+  ensureImplementationRegistry(
+    event.params.newRegistry,
+    event.block.timestamp,
+    event.block.number
+  );
 
   // Create registry update record
   let updateId = event.transaction.hash.concatI32(event.logIndex.toI32());

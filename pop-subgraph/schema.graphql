@@ -2143,6 +2143,105 @@ type RegistryUpdate @entity(immutable: true) {
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+#                 IMPLEMENTATION REGISTRY ENTITIES
+# ═══════════════════════════════════════════════════════════════════════
+#
+# "Which version is behind this module proxy?" — answerable from the subgraph.
+#
+# A proxy resolves to an implementation ADDRESS (via its beacon, or its ERC-1967 slot). Only
+# ImplementationRegistry knows the human version string for that address: the contracts have no
+# `version()` getter, and the registry's own `getImplementation(typeName, version)` needs the
+# version string you are trying to discover in the first place.
+#
+# `Beacon.currentImplementation` / `Beacon.version` already answer this for the CURRENT mirror
+# implementation of an auto-upgrading beacon. They cannot answer it for:
+#   - a historical implementation (what version was this org on last month?),
+#   - a SwitchableBeacon pinned to an older implementation, which by definition is NOT the
+#     beacon's current one,
+#   - a direct (non-beacon) proxy, which has no Beacon row at all.
+#
+# `ImplementationVersion` is keyed by the implementation address precisely so those cases become
+# a single point lookup: `implementationVersion(id: $addr) { version typeName }`.
+
+type ImplementationRegistryContract @entity(immutable: false) {
+  id: Bytes! # registry contract address
+  owner: Bytes # who may call registerImplementation (OwnableUpgradeable)
+  typeCount: BigInt! # distinct typeIds this registry has registered at least once
+  registrationCount: BigInt! # total ImplementationRegistered events observed
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  lastRegisteredAt: BigInt
+  types: [ImplementationType!]! @derivedFrom(field: "registry")
+  registrations: [ImplementationRegistration!]! @derivedFrom(field: "registry")
+}
+
+type ImplementationType @entity(immutable: false) {
+  id: String! # registryAddress-typeId
+  registry: ImplementationRegistryContract!
+  typeId: Bytes! # keccak256(typeName)
+  typeName: String! # "TaskManager", "HybridVoting", …
+  # The most recent version registered with `latest: true`. NOTE: the registry's
+  # `setLatestVersion(typeName, version)` promotes an ALREADY-registered version and emits NO
+  # event, so a promotion that is not accompanied by a registration is invisible here. These
+  # fields therefore mean "latest as of the last registration", which is exactly the fidelity
+  # available on-chain from logs alone — treat them as a strong hint, not as consensus truth.
+  latestVersion: String
+  latestVersionId: Bytes
+  latestImplementation: Bytes
+  versionCount: BigInt! # registrations seen for this type (versions are append-only on-chain)
+  firstRegisteredAt: BigInt!
+  lastRegisteredAt: BigInt!
+  versions: [ImplementationVersion!]! @derivedFrom(field: "type")
+}
+
+# One row per implementation ADDRESS. This is the entity the CLI reads.
+#
+# Keying by address (rather than by type+version) makes the lookup direction match the question:
+# you start from an address you read out of a proxy and you want the version string back.
+#
+# Last write wins if the same address is registered more than once — the same bytecode can
+# legitimately be registered under a second version of its type, or under a second type
+# entirely. The full history is preserved in `registrations`, so nothing is lost; this field set
+# just reflects the most recent registration of that address.
+type ImplementationVersion @entity(immutable: false) {
+  id: Bytes! # implementation contract address
+  registry: ImplementationRegistryContract!
+  type: ImplementationType!
+  typeId: Bytes! # denormalised so a version lookup needs no join
+  typeName: String! # denormalised, ditto
+  version: String! # "v1", "v6", …
+  versionId: Bytes! # keccak256(version)
+  # True when this address is the latest registered version of its type. Cleared automatically
+  # when a newer version of the SAME type is registered with `latest: true`.
+  latest: Boolean!
+  registrationCount: BigInt! # how many times this address has been registered
+  registeredAt: BigInt! # timestamp of the most recent registration
+  registeredAtBlock: BigInt!
+  firstRegisteredAt: BigInt! # timestamp of the FIRST registration, never rewritten
+  firstRegisteredAtBlock: BigInt!
+  transactionHash: Bytes!
+  registrations: [ImplementationRegistration!]! @derivedFrom(field: "implementationVersion")
+}
+
+# Immutable log of every ImplementationRegistered event, so re-registering an address (which
+# overwrites ImplementationVersion) never destroys the earlier record.
+type ImplementationRegistration @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  registry: ImplementationRegistryContract!
+  type: ImplementationType!
+  implementationVersion: ImplementationVersion!
+  typeId: Bytes!
+  typeName: String!
+  versionId: Bytes!
+  version: String!
+  implementation: Bytes!
+  latest: Boolean! # the flag as emitted, never back-dated
+  registeredAt: BigInt!
+  registeredAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 #                    PASSKEY ACCOUNT ENTITIES
 # ═══════════════════════════════════════════════════════════════════════
 
