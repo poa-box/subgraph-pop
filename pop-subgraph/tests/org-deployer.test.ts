@@ -205,6 +205,16 @@ describe("OrgDeployer", () => {
       "totalSupply",
       "0"
     );
+    // ParticipationToken has no ExecutorUpdated event and no setter, so the executor is only
+    // ever knowable from OrgDeployed (which carries the same address the deployer passes into
+    // initialize) or from the getter. Seeding it here — rather than leaving the zero address it
+    // used to keep forever — makes the non-null field actually mean something.
+    assert.fieldEquals(
+      "ParticipationTokenContract",
+      "0x0000000000000000000000000000000000000005",
+      "executor",
+      "0x0000000000000000000000000000000000000001"
+    );
 
     // Verify QuickJoinContract entity and its relationship back to Organization
     assert.fieldEquals(
