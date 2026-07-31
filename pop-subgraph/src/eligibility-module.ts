@@ -549,7 +549,15 @@ function getOrCreateWearerVouchState(
     state.effectiveCount = 0;
     state.epoch = BigInt.fromI32(0);
     state.cleared = false;
+  }
 
+  // RETRIED until it succeeds, not linked once at creation. A wearer does not have to be
+  // a member to be vouched for — vouchFor only gates the VOUCHER on membershipHatId — so
+  // the usual order is "vouches accumulate, quorum reached, wearer claims the hat", and
+  // handleHatClaimed is the join handler that finally creates their User. Linking only on
+  // creation would leave User.vouchStates permanently empty for exactly those wearers.
+  let linkedUser: string | null = state.wearerUser;
+  if (!linkedUser) {
     let eligibilityModule = EligibilityModuleContract.load(module);
     if (eligibilityModule) {
       let wearerUser = loadExistingUser(
@@ -563,6 +571,7 @@ function getOrCreateWearerVouchState(
       }
     }
   }
+
   // Refreshed on every real vouch/revoke/clear. Deliberately NOT done in the epoch
   // sweep, which reaches states through the loader and must not touch unrelated wearers.
   state.wearerUsername = getUsernameForAddress(wearer);

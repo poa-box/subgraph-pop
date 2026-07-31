@@ -45,6 +45,7 @@ import {
   createVouchRevokedEvent,
   createWearerVouchesClearedEvent
 } from "./eligibility-module-utils";
+import { createUserOnJoin } from "../src/utils";
 import {
   Organization,
   ExecutorContract,
@@ -60,7 +61,8 @@ import {
   Hat,
   Role,
   RoleApplication,
-  Vouch
+  Vouch,
+  WearerVouchState
 } from "../generated/schema";
 
 /**
@@ -721,6 +723,11 @@ function vouchWearer(): Address {
   return Address.fromString("0x00000000000000000000000000000000000000aa");
 }
 
+/** A SECOND wearer on the same hat — proves clearWearerVouches is per-wearer, not per-hat. */
+function otherWearer(): Address {
+  return Address.fromString("0x00000000000000000000000000000000000000dd");
+}
+
 function voucherA(): Address {
   return Address.fromString("0x00000000000000000000000000000000000000b1");
 }
@@ -741,16 +748,30 @@ function wearerStateId(): string {
   return VOUCH_MODULE + "-" + VOUCH_HAT_ID.toString() + "-" + vouchWearer().toHexString();
 }
 
-function vouchRowId(voucher: Address): string {
+function vouchRowIdFor(wearer: Address, voucher: Address): string {
   return (
     VOUCH_MODULE +
     "-" +
     VOUCH_HAT_ID.toString() +
     "-" +
-    vouchWearer().toHexString() +
+    wearer.toHexString() +
     "-" +
     voucher.toHexString()
   );
+}
+
+function vouchRowId(voucher: Address): string {
+  return vouchRowIdFor(vouchWearer(), voucher);
+}
+
+function wearerStateIdFor(wearer: Address): string {
+  return VOUCH_MODULE + "-" + VOUCH_HAT_ID.toString() + "-" + wearer.toHexString();
+}
+
+function castVouchFor(wearer: Address, voucher: Address, newCount: i32, logIndex: i32): void {
+  let event = createVouchedEvent(voucher, wearer, vouchHat(), BigInt.fromI32(newCount));
+  event.logIndex = BigInt.fromI32(logIndex);
+  handleVouched(event);
 }
 
 /** Enable vouching with the given quorum. Each call is one on-chain epoch bump. */
@@ -951,6 +972,74 @@ describe("Vouch epoch tracking", () => {
 
     assert.fieldEquals("WearerVouchesClearedEvent", eventId, "clearedCount", "0");
     assert.fieldEquals("WearerVouchState", wearerStateId(), "epoch", CLEARED_SENTINEL);
+  });
+
+  test("clearWearerVouches is surgical — a second wearer on the same hat is untouched", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouch(voucherB(), 2, 3);
+    // Same hat, same vouchers, different wearer.
+    castVouchFor(otherWearer(), voucherA(), 1, 4);
+    castVouchFor(otherWearer(), voucherB(), 2, 5);
+
+    clearVouches(6);
+
+    // The cleared wearer is zeroed ...
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "0");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
+    assert.fieldEquals("Vouch", vouchRowId(voucherB()), "isActive", "false");
+
+    // ... and the other wearer still has quorum, exactly as the contract does: only
+    // wearerVouchEpoch[hat][clearedWearer] moved. A hat-wide sweep here would silently
+    // drop this wearer from `pop vouch list` while the contract still says quorum met.
+    assert.fieldEquals("WearerVouchState", wearerStateIdFor(otherWearer()), "count", "2");
+    assert.fieldEquals("WearerVouchState", wearerStateIdFor(otherWearer()), "effectiveCount", "2");
+    assert.fieldEquals("WearerVouchState", wearerStateIdFor(otherWearer()), "epoch", "1");
+    assert.fieldEquals("WearerVouchState", wearerStateIdFor(otherWearer()), "cleared", "false");
+    assert.fieldEquals("Vouch", vouchRowIdFor(otherWearer(), voucherA()), "isActive", "true");
+    assert.fieldEquals("Vouch", vouchRowIdFor(otherWearer(), voucherB()), "isActive", "true");
+  });
+
+  test("an epoch bump DOES sweep every wearer on the hat", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+    castVouch(voucherA(), 1, 2);
+    castVouchFor(otherWearer(), voucherA(), 1, 3);
+
+    // Unlike clearWearerVouches, configureVouching voids the whole hat.
+    configureVouching(2, 4);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "effectiveCount", "0");
+    assert.fieldEquals("WearerVouchState", wearerStateIdFor(otherWearer()), "effectiveCount", "0");
+    assert.fieldEquals("Vouch", vouchRowId(voucherA()), "isActive", "false");
+    assert.fieldEquals("Vouch", vouchRowIdFor(otherWearer(), voucherA()), "isActive", "false");
+  });
+
+  test("wearerUser is backfilled once the wearer finally joins", () => {
+    setupEligibilityModuleEntities();
+    configureVouching(2, 1);
+
+    // Vouched for before any User entity exists — the normal order, since vouchFor gates
+    // the VOUCHER on membership, not the wearer, and the wearer only joins on hat claim.
+    castVouch(voucherA(), 1, 2);
+    let state = WearerVouchState.load(wearerStateId())!;
+    assert.assertTrue(!state.wearerUser);
+
+    let user = createUserOnJoin(
+      Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      ),
+      vouchWearer(),
+      "HatClaim",
+      BigInt.fromI32(2000),
+      BigInt.fromI32(200)
+    )!;
+
+    // The next vouch must pick the link up rather than skip it as already-created.
+    castVouch(voucherB(), 2, 3);
+
+    assert.fieldEquals("WearerVouchState", wearerStateId(), "wearerUser", user.id);
   });
 
   test("a cleared wearer's tally restarts when a new voucher vouches", () => {
