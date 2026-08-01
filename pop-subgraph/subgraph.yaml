@@ -449,6 +449,8 @@ templates:
           handler: handleTaskClaimDeadlineSet
         - event: TaskClaimExpired(indexed uint256,indexed address,indexed address)
           handler: handleTaskClaimExpired
+        - event: TaskUnclaimed(indexed uint256,indexed address,indexed address)
+          handler: handleTaskUnclaimed
       file: ./src/task-manager.ts
   - kind: ethereum
     name: HybridVoting

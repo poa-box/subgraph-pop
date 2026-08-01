@@ -24,7 +24,8 @@ import {
   handleTaskClaimed,
   handleTaskDeadlinesSet,
   handleTaskClaimDeadlineSet,
-  handleTaskClaimExpired
+  handleTaskClaimExpired,
+  handleTaskUnclaimed
 } from "../src/task-manager";
 import {
   createProjectCreatedEvent,
@@ -43,7 +44,8 @@ import {
   createTaskClaimedEvent,
   createTaskDeadlinesSetEvent,
   createTaskClaimDeadlineSetEvent,
-  createTaskClaimExpiredEvent
+  createTaskClaimExpiredEvent,
+  createTaskUnclaimedEvent
 } from "./task-manager-utils";
 import { Task, Organization, TaskManager, User, HybridVotingContract, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract } from "../generated/schema";
 
@@ -247,6 +249,7 @@ function createDeadlineTestUser(userAddress: Address): void {
   user.totalTasksCompleted = BigInt.fromI32(0);
   user.totalTasksCancelled = BigInt.fromI32(0);
   user.totalTasksLostToExpiry = BigInt.fromI32(0);
+  user.totalTasksReleased = BigInt.fromI32(0);
   user.totalModulesCompleted = BigInt.fromI32(0);
   user.totalClaimsAmount = BigInt.fromI32(0);
   user.totalPaymentsAmount = BigInt.fromI32(0);
@@ -1568,5 +1571,113 @@ describe("TaskManager", () => {
       "newClaimerUser",
       orgId.toHexString() + "-" + bob.toHexString()
     );
+  });
+
+  test("Self-release returns the task to Open, clears the claim, and records a TaskRelease", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(2000)));
+    assert.fieldEquals("Task", entityId, "status", "Assigned");
+
+    let releaseEvent = createTaskUnclaimedEvent(taskId, alice, alice);
+    releaseEvent.logIndex = BigInt.fromI32(4);
+    handleTaskUnclaimed(releaseEvent);
+
+    assert.fieldEquals("Task", entityId, "status", "Open");
+    assert.fieldEquals("Task", entityId, "releaseCount", "1");
+    let task = Task.load(entityId)!;
+    assert.assertTrue(task.assignee === null);
+    assert.assertTrue(task.assigneeUser === null);
+    assert.assertTrue(task.assignedAt === null);
+    assert.assertTrue(task.claimDeadline === null);
+
+    assert.entityCount("TaskRelease", 1);
+    let releaseId = releaseEvent.transaction.hash.concatI32(4).toHexString();
+    assert.fieldEquals("TaskRelease", releaseId, "task", entityId);
+    assert.fieldEquals("TaskRelease", releaseId, "previousClaimer", alice.toHexString());
+    assert.fieldEquals("TaskRelease", releaseId, "caller", alice.toHexString());
+    assert.fieldEquals("TaskRelease", releaseId, "selfRelease", "true");
+  });
+
+  test("Self-release counts totalTasksReleased, not totalTasksLostToExpiry", () => {
+    let taskId = BigInt.fromI32(1);
+    setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    createDeadlineTestUser(alice);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    let releaseEvent = createTaskUnclaimedEvent(taskId, alice, alice);
+    releaseEvent.logIndex = BigInt.fromI32(5);
+    handleTaskUnclaimed(releaseEvent);
+
+    assert.fieldEquals("User", aliceUserId, "totalTasksReleased", "1");
+    assert.fieldEquals("User", aliceUserId, "totalTasksLostToExpiry", "0");
+    let releaseId = releaseEvent.transaction.hash.concatI32(5).toHexString();
+    assert.fieldEquals("TaskRelease", releaseId, "previousClaimerUser", aliceUserId);
+    assert.fieldEquals("TaskRelease", releaseId, "callerUser", aliceUserId);
+  });
+
+  test("Third-party release of an expired claim counts as a loss, not a voluntary release", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+    createDeadlineTestUser(alice);
+    createDeadlineTestUser(bob);
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let aliceUserId = orgId.toHexString() + "-" + alice.toHexString();
+    let bobUserId = orgId.toHexString() + "-" + bob.toHexString();
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    // unclaimTask emits NO TaskClaimExpired (it names no replacement claimer), so this
+    // handler is the only place the loss can be recorded.
+    let releaseEvent = createTaskUnclaimedEvent(taskId, alice, bob);
+    releaseEvent.logIndex = BigInt.fromI32(6);
+    handleTaskUnclaimed(releaseEvent);
+
+    assert.fieldEquals("Task", entityId, "status", "Open");
+    assert.fieldEquals("User", aliceUserId, "totalTasksLostToExpiry", "1");
+    assert.fieldEquals("User", aliceUserId, "totalTasksReleased", "0");
+    let releaseId = releaseEvent.transaction.hash.concatI32(6).toHexString();
+    assert.fieldEquals("TaskRelease", releaseId, "selfRelease", "false");
+    assert.fieldEquals("TaskRelease", releaseId, "previousClaimerUser", aliceUserId);
+    assert.fieldEquals("TaskRelease", releaseId, "callerUser", bobUserId);
+  });
+
+  test("Release then re-claim re-links the new claimer and restarts the deadline", () => {
+    let taskId = BigInt.fromI32(1);
+    let entityId = setupDeadlineTask(taskId);
+    let alice = Address.fromString("0x000000000000000000000000000000000000a11c");
+    let bob = Address.fromString("0x000000000000000000000000000000000000b0b1");
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, alice));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(2000)));
+
+    let releaseEvent = createTaskUnclaimedEvent(taskId, alice, alice);
+    releaseEvent.logIndex = BigInt.fromI32(7);
+    handleTaskUnclaimed(releaseEvent);
+    // Contract order: TaskUnclaimed then TaskClaimDeadlineSet(id, 0) when a window ran.
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(0)));
+    assert.fieldEquals("Task", entityId, "status", "Open");
+
+    handleTaskClaimed(createTaskClaimedEvent(taskId, bob));
+    handleTaskClaimDeadlineSet(createTaskClaimDeadlineSetEvent(taskId, BigInt.fromI32(5000)));
+
+    assert.fieldEquals("Task", entityId, "assignee", bob.toHexString());
+    assert.fieldEquals("Task", entityId, "status", "Assigned");
+    assert.fieldEquals("Task", entityId, "claimDeadline", "5000");
+    assert.fieldEquals("Task", entityId, "releaseCount", "1");
+    assert.fieldEquals("Task", entityId, "reclaimCount", "0");
+    assert.entityCount("TaskRelease", 1);
+    assert.entityCount("TaskClaimExpiry", 0);
   });
 });

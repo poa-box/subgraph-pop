@@ -18,7 +18,8 @@ import {
   RolePermSet,
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
-  TaskClaimExpired
+  TaskClaimExpired,
+  TaskUnclaimed
 } from "../generated/templates/TaskManager/TaskManager";
 
 export function createProjectCreatedEvent(
@@ -388,6 +389,30 @@ export function createTaskClaimExpiredEvent(
   );
   event.parameters.push(
     new ethereum.EventParam("newClaimer", ethereum.Value.fromAddress(newClaimer))
+  );
+
+  return event;
+}
+
+export function createTaskUnclaimedEvent(
+  id: BigInt,
+  previousClaimer: Address,
+  caller: Address
+): TaskUnclaimed {
+  let event = changetype<TaskUnclaimed>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id))
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "previousClaimer",
+      ethereum.Value.fromAddress(previousClaimer)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam("caller", ethereum.Value.fromAddress(caller))
   );
 
   return event;
