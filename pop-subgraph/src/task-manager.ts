@@ -20,6 +20,7 @@ import {
   FoldersUpdated,
   OrganizerHatAllowed,
   RolePermSet,
+  HatSet,
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
   TaskClaimExpired,
@@ -859,6 +860,59 @@ export function handleOrganizerHatAllowed(event: OrganizerHatAllowed): void {
   }
 
   taskManager.organizerHatIds = next;
+  taskManager.save();
+}
+
+/**
+ * Handles the HatSet event from a TaskManager contract.
+ * Mutates the denormalized creatorHatIds array (hats allowed to create projects).
+ *
+ * The contract emits HatSet(HatType.CREATOR, hat, allowed) from both of its only
+ * two writers of creatorHatIds: once per seeded hat inside initialize(), and again
+ * on setConfig(CREATOR_HAT_ALLOWED). The deploy-time emissions precede OrgDeployed
+ * in the same block, and graph-node replays a block's earlier triggers to templates
+ * created mid-block — so these events are the complete source of truth, including
+ * for the initial set. handleOrgDeployed therefore seeds creatorHatIds to [].
+ *
+ * hatType is CREATOR (0) in every deployed version; guard so a future variant can't
+ * silently pollute the array.
+ *
+ * Mirrors HatManager.setHatInArray exactly, INCLUDING its swap-and-pop removal
+ * (libs/HatManager.sol: `hatArray[i] = hatArray[len-1]; hatArray.pop()`). Removing a
+ * hat therefore moves the last element into the gap rather than shifting — so the
+ * stored array matches getLensData(5) element-for-element, not merely as a set.
+ * Adding a present hat or removing an absent one is a no-op on-chain (setHatInArray
+ * returns false), and is a no-op here too.
+ */
+export function handleHatSet(event: HatSet): void {
+  if (event.params.hatType != 0) return;
+
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) return;
+
+  let hatId = event.params.hat;
+  let allowed = event.params.allowed;
+
+  // Copy-mutate-reassign — AssemblyScript array fields don't mutate in place.
+  let next = taskManager.creatorHatIds;
+  let index = -1;
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].equals(hatId)) {
+      index = i;
+      break;
+    }
+  }
+
+  if (allowed) {
+    if (index != -1) return; // already present — contract makes no change
+    next.push(hatId);
+  } else {
+    if (index == -1) return; // absent — contract makes no change
+    next[index] = next[next.length - 1]; // swap-and-pop, as HatManager does
+    next.pop();
+  }
+
+  taskManager.creatorHatIds = next;
   taskManager.save();
 }
 

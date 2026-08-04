@@ -21,6 +21,7 @@ import {
   handleFoldersUpdated,
   handleOrganizerHatAllowed,
   handleRolePermSet,
+  handleHatSet,
   handleTaskClaimed,
   handleTaskDeadlinesSet,
   handleTaskClaimDeadlineSet,
@@ -41,6 +42,7 @@ import {
   createFoldersUpdatedEvent,
   createOrganizerHatAllowedEvent,
   createRolePermSetEvent,
+  createHatSetEvent,
   createTaskClaimedEvent,
   createTaskDeadlinesSetEvent,
   createTaskClaimDeadlineSetEvent,
@@ -1365,6 +1367,104 @@ describe("TaskManager", () => {
     handleOrganizerHatAllowed(createOrganizerHatAllowedEvent(hatId, false));
 
     assert.fieldEquals("TaskManager", tmAddr, "organizerHatIds", "[]");
+  });
+
+  // ========================================
+  // HatSet (creator hats) Tests
+  // ========================================
+
+  test("HatSet adds hat to creatorHatIds when allowed=true", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(42), true));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002, 42]");
+  });
+
+  test("HatSet is idempotent on duplicate add", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(42), true));
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(42), true));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002, 42]");
+  });
+
+  test("HatSet removes hat when allowed=false", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(42), true));
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1002), false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[42]");
+  });
+
+  // HatManager.setHatInArray removes with swap-and-pop, not an order-preserving
+  // shift, so the last element lands in the removed slot. Matching that keeps the
+  // stored array equal to getLensData(5) element-for-element, not merely as a set.
+  test("HatSet removal uses swap-and-pop ordering like HatManager", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(43), true));
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(44), true));
+    // [1002, 43, 44] -> remove 1002 -> last element (44) fills the gap
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1002), false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[44, 43]");
+  });
+
+  test("HatSet remove on absent hat is a no-op", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(42), false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002]");
+  });
+
+  test("HatSet ignores non-CREATOR hatType", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(1, BigInt.fromI32(42), true));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[1002]");
+  });
+
+  // Regression for issue #203: the deploy-time HatSet emissions from
+  // TaskManager.initialize() are the sole source of creatorHatIds. Argus
+  // (Gnosis) has taskCreatorRolesBitmap = 0b01, so the only creator hat is
+  // roleHatIds[0] — the exact inverse of the old roleHatIds[1:] heuristic.
+  test("HatSet reconstructs an inverted creator set from an empty seed", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+    let taskManager = TaskManager.load(
+      Address.fromString(tmAddr)
+    ) as TaskManager;
+    taskManager.creatorHatIds = []; // as handleOrgDeployed now seeds it
+    taskManager.save();
+
+    // roleHatIds = [agent, apprentice]; only roleHatIds[0] is a creator
+    let agent = BigInt.fromString("30222100625258283641858621132055137413908072809768050515156576961036288");
+    handleHatSet(createHatSetEvent(0, agent, true));
+
+    assert.fieldEquals(
+      "TaskManager",
+      tmAddr,
+      "creatorHatIds",
+      "[30222100625258283641858621132055137413908072809768050515156576961036288]"
+    );
   });
 
   // ========================================

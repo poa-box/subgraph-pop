@@ -16,6 +16,7 @@ import {
   FoldersUpdated,
   OrganizerHatAllowed,
   RolePermSet,
+  HatSet,
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
   TaskClaimExpired,
@@ -282,6 +283,27 @@ export function createOrganizerHatAllowedEvent(
   event.parameters = new Array();
   event.parameters.push(
     new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("allowed", ethereum.Value.fromBoolean(allowed))
+  );
+
+  return event;
+}
+
+export function createHatSetEvent(
+  hatType: i32,
+  hat: BigInt,
+  allowed: boolean
+): HatSet {
+  let event = changetype<HatSet>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hatType", ethereum.Value.fromI32(hatType))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hat", ethereum.Value.fromUnsignedBigInt(hat))
   );
   event.parameters.push(
     new ethereum.EventParam("allowed", ethereum.Value.fromBoolean(allowed))
