@@ -506,7 +506,16 @@ type VotingClass @entity(immutable: false) {
   minBalance: BigInt!            # Minimum balance required (for ERC20_BAL)
   asset: Bytes!                  # ERC20 token address (zero for DIRECT)
   hatIds: [BigInt!]!             # Hat IDs that can vote in this class
-  isActive: Boolean!             # True if this is the current version
+  # True only for rows in the config that is live right now. setClasses replaces the whole array on
+  # chain, so every earlier version's rows go false. Strictly narrower than
+  # version == HybridVotingContract.classVersion: version is the block number, so two setClasses in
+  # one block share a version, and rows the second write no longer covers stay false at the live
+  # version.
+  # Do NOT filter on this when reconstructing the config a proposal was created under — superseded
+  # rows are retained on purpose and are what Proposal.classesVersion points at. Match on version;
+  # if that version was written twice in one block, the last VotingClassChange for it carries the
+  # numClasses that were actually in force.
+  isActive: Boolean!
   createdAt: BigInt!
   createdAtBlock: BigInt!
   transactionHash: Bytes!

@@ -33,8 +33,11 @@ import {
   createVoteCastEvent,
   createWinnerEvent,
   createProposalExecutedEvent,
-  createClassesReplacedEvent
+  createClassesReplacedEvent,
+  createClassesReplacedEventWithClasses,
+  createClassConfig
 } from "./hybrid-voting-utils";
+import { ClassesReplaced } from "../generated/templates/HybridVoting/HybridVoting";
 import { Organization, HybridVotingContract, HybridVotingThresholdChange, TaskManager, DirectDemocracyVotingContract, EligibilityModuleContract, ParticipationTokenContract, QuickJoinContract, EducationHubContract, PaymentManagerContract, ExecutorContract, ToggleModuleContract, VotingClass, VotingClassChange } from "../generated/schema";
 
 /**
@@ -197,6 +200,73 @@ function mockCreatorHats(contractAddress: Address, hatIds: BigInt[]): void {
     "creatorHats",
     "creatorHats():(uint256[])"
   ).returns([ethereum.Value.fromUnsignedBigIntArray(hatIds)]);
+}
+
+/**
+ * Builds a ClassesReplaced carrying `numClasses` DIRECT classes at `version`.
+ * logIndex must be unique per emission within a test: VotingClassChange is immutable and
+ * keyed on txHash.concatI32(logIndex), and every mock event shares one default tx hash.
+ */
+function classesReplacedWithCount(
+  version: BigInt,
+  numClasses: i32,
+  logIndex: i32
+): ClassesReplaced {
+  let classConfigs: ethereum.Tuple[] = [];
+  for (let i = 0; i < numClasses; i++) {
+    classConfigs.push(
+      createClassConfig(0, 100 / numClasses, false, BigInt.fromI32(0), Address.zero(), [
+        BigInt.fromI32(1001 + i)
+      ])
+    );
+  }
+
+  let event = createClassesReplacedEventWithClasses(
+    version,
+    Bytes.fromHexString(
+      "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    ),
+    1700000000 as i64,
+    classConfigs
+  );
+  event.logIndex = BigInt.fromI32(logIndex);
+  return event;
+}
+
+/** VotingClass id: hybridVoting-version-classIndex (schema.graphql). */
+function votingClassId(contractAddress: Address, version: i32, classIndex: i32): string {
+  return (
+    contractAddress.toHexString() + "-" + version.toString() + "-" + classIndex.toString()
+  );
+}
+
+/**
+ * Writes an active VotingClass row straight to the store, standing in for one the pre-fix
+ * handler left behind. Lets a test start from more than one simultaneously-active version,
+ * which no sequence of ClassesReplaced events can produce once the sweep is in place.
+ */
+function seedActiveVotingClass(
+  contractAddress: Address,
+  version: BigInt,
+  classIndex: i32
+): void {
+  let votingClass = new VotingClass(
+    contractAddress.toHexString() + "-" + version.toString() + "-" + classIndex.toString()
+  );
+  votingClass.hybridVoting = contractAddress;
+  votingClass.version = version;
+  votingClass.classIndex = classIndex;
+  votingClass.strategy = "DIRECT";
+  votingClass.slicePct = 100;
+  votingClass.quadratic = false;
+  votingClass.minBalance = BigInt.fromI32(0);
+  votingClass.asset = Address.zero();
+  votingClass.hatIds = [BigInt.fromI32(1001)];
+  votingClass.isActive = true;
+  votingClass.createdAt = BigInt.fromI32(1000);
+  votingClass.createdAtBlock = BigInt.fromI32(100);
+  votingClass.transactionHash = Bytes.fromHexString("0xabcd");
+  votingClass.save();
 }
 
 describe("HybridVoting", () => {
@@ -1118,6 +1188,150 @@ describe("HybridVoting", () => {
         "createdAtBlock",
         event.block.number.toString()
       );
+    });
+
+    test("a new version deactivates the superseded version's classes", () => {
+      let first = classesReplacedWithCount(BigInt.fromI32(100), 2, 1);
+      setupHybridVotingContract(first.address);
+      handleClassesReplaced(first);
+
+      let second = classesReplacedWithCount(BigInt.fromI32(200), 2, 2);
+      handleClassesReplaced(second);
+
+      // Superseded rows are retained (Proposal.classesVersion points at them) but go false.
+      assert.entityCount("VotingClass", 4);
+      assert.entityCount("VotingClassChange", 2);
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 1), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 200, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 200, 1), "isActive", "true");
+      assert.fieldEquals(
+        "HybridVotingContract",
+        first.address.toHexString(),
+        "classVersion",
+        "200"
+      );
+    });
+
+    test("only the newest of three versions stays active", () => {
+      let v1 = classesReplacedWithCount(BigInt.fromI32(100), 2, 1);
+      setupHybridVotingContract(v1.address);
+      handleClassesReplaced(v1);
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(200), 2, 2));
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(300), 2, 3));
+
+      assert.entityCount("VotingClass", 6);
+      assert.entityCount("VotingClassChange", 3);
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 100, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 100, 1), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 200, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 200, 1), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 300, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(v1.address, 300, 1), "isActive", "true");
+    });
+
+    test("a shrinking config leaves no orphan active rows", () => {
+      let wide = classesReplacedWithCount(BigInt.fromI32(100), 3, 1);
+      setupHybridVotingContract(wide.address);
+      handleClassesReplaced(wide);
+
+      // 3 classes -> 2: the old classIndex 2 has no successor id to overwrite it.
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(200), 2, 2));
+
+      assert.entityCount("VotingClass", 5);
+      assert.entityCount("VotingClassChange", 2);
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 1), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 2), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 200, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 200, 1), "isActive", "true");
+    });
+
+    test("re-emitting the same version keeps that version's classes active", () => {
+      // version IS the block number, so two setClasses in one block reuse the same ids.
+      let first = classesReplacedWithCount(BigInt.fromI32(100), 2, 1);
+      setupHybridVotingContract(first.address);
+      handleClassesReplaced(first);
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(100), 2, 2));
+
+      assert.entityCount("VotingClass", 2);
+      assert.entityCount("VotingClassChange", 2);
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 1), "isActive", "true");
+    });
+
+    test("a same-block shrink drops the rows the rewrite cannot reach", () => {
+      let wide = classesReplacedWithCount(BigInt.fromI32(100), 3, 1);
+      setupHybridVotingContract(wide.address);
+      handleClassesReplaced(wide);
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(100), 2, 2));
+
+      assert.entityCount("VotingClassChange", 2);
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 1), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(wide.address, 100, 2), "isActive", "false");
+    });
+
+    test("supersession is scoped to one HybridVoting contract", () => {
+      let mine = classesReplacedWithCount(BigInt.fromI32(100), 2, 1);
+      setupHybridVotingContract(mine.address);
+      handleClassesReplaced(mine);
+
+      // A second org's HybridVoting replacing its classes must not touch the first org's rows.
+      let otherAddress = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let theirs = classesReplacedWithCount(BigInt.fromI32(200), 2, 2);
+      theirs.address = otherAddress;
+      setupHybridVotingContract(otherAddress);
+      handleClassesReplaced(theirs);
+
+      assert.fieldEquals("VotingClass", votingClassId(mine.address, 100, 0), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(mine.address, 100, 1), "isActive", "true");
+      assert.fieldEquals("VotingClass", votingClassId(otherAddress, 200, 0), "isActive", "true");
+    });
+
+    test("the sweep clears every active version, not just the previous one", () => {
+      let event = classesReplacedWithCount(BigInt.fromI32(300), 2, 1);
+      setupHybridVotingContract(event.address);
+
+      // Two versions left active by the pre-fix handler. Sweeping only contract.classVersion
+      // would strand v100, so this is what pins the sweep to the derived loader.
+      seedActiveVotingClass(event.address, BigInt.fromI32(100), 0);
+      seedActiveVotingClass(event.address, BigInt.fromI32(200), 0);
+
+      handleClassesReplaced(event);
+
+      assert.fieldEquals("VotingClass", votingClassId(event.address, 100, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(event.address, 200, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(event.address, 300, 0), "isActive", "true");
+    });
+
+    test("a proposal's snapshot version still resolves after its config is superseded", () => {
+      let first = classesReplacedWithCount(BigInt.fromI32(100), 2, 1);
+      setupHybridVotingContract(first.address);
+      handleClassesReplaced(first);
+
+      let proposalEvent = createNewProposalEvent(
+        BigInt.fromI32(0),
+        Bytes.fromUTF8("Proposal under v100"),
+        Bytes.fromHexString(
+          "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ),
+        2,
+        1700003600 as i64,
+        1700000000 as i64
+      );
+      handleNewProposal(proposalEvent);
+
+      let proposalId = first.address.toHexString() + "-0";
+      assert.fieldEquals("Proposal", proposalId, "classesVersion", "100");
+
+      handleClassesReplaced(classesReplacedWithCount(BigInt.fromI32(200), 2, 2));
+
+      // The snapshot rows survive the flip — reconstruct by version, never by isActive.
+      assert.fieldEquals("Proposal", proposalId, "classesVersion", "100");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 0), "version", "100");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 0), "isActive", "false");
+      assert.fieldEquals("VotingClass", votingClassId(first.address, 100, 1), "version", "100");
     });
   });
 });

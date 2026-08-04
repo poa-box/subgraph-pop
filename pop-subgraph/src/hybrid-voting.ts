@@ -551,9 +551,23 @@ export function handleClassesReplaced(event: ClassesReplaced): void {
   let version = event.params.version;
   let contractAddress = event.address.toHexString();
 
-  // Mark all previous VotingClass entities for this contract as inactive
-  // (We can't query for them directly in AssemblyScript, so we'll just create new ones)
-  // The isActive field will help queries filter for current classes
+  // setClasses REPLACES the whole array on chain, so every row an earlier ClassesReplaced
+  // wrote is dead now — and no per-row event says so. Consumers filtering on isActive would
+  // otherwise keep seeing superseded configs.
+  // Sweep BEFORE the create loop, never after: `version` is the emitting block number, so two
+  // setClasses in one block reuse the same ids and a post-hoc sweep would flip the rows this
+  // handler just wrote. Sweeping first also leaves no orphan when the new config has FEWER
+  // classes than the old one — rows whose index no longer exists stay false.
+  // Sweeping ALL rows rather than just contract.classVersion's is deliberate: it self-heals any
+  // version left active by an earlier miss, which the bounded form cannot. The isActive check is
+  // only there to skip redundant writes.
+  let superseded = contract.votingClasses.load();
+  for (let i = 0; i < superseded.length; i++) {
+    let stale = superseded[i];
+    if (!stale.isActive) continue;
+    stale.isActive = false;
+    stale.save();
+  }
 
   // Create VotingClass entities for each class in the new configuration
   let classes = event.params.classes;
