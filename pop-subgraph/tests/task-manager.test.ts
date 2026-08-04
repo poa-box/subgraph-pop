@@ -1405,6 +1405,22 @@ describe("TaskManager", () => {
     assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[42]");
   });
 
+  // HatManager.setHatInArray removes with swap-and-pop, not an order-preserving
+  // shift, so the last element lands in the removed slot. Matching that keeps the
+  // stored array equal to getLensData(5) element-for-element, not merely as a set.
+  test("HatSet removal uses swap-and-pop ordering like HatManager", () => {
+    setupTaskManagerEntities();
+
+    let tmAddr = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
+
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(43), true));
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(44), true));
+    // [1002, 43, 44] -> remove 1002 -> last element (44) fills the gap
+    handleHatSet(createHatSetEvent(0, BigInt.fromI32(1002), false));
+
+    assert.fieldEquals("TaskManager", tmAddr, "creatorHatIds", "[44, 43]");
+  });
+
   test("HatSet remove on absent hat is a no-op", () => {
     setupTaskManagerEntities();
 

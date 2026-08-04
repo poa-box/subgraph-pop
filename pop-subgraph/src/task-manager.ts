@@ -875,8 +875,14 @@ export function handleOrganizerHatAllowed(event: OrganizerHatAllowed): void {
  * for the initial set. handleOrgDeployed therefore seeds creatorHatIds to [].
  *
  * hatType is CREATOR (0) in every deployed version; guard so a future variant can't
- * silently pollute the array. Same add/remove/no-op semantics as
- * handleOrganizerHatAllowed, mirroring the contract's HatManager.setHatInArray.
+ * silently pollute the array.
+ *
+ * Mirrors HatManager.setHatInArray exactly, INCLUDING its swap-and-pop removal
+ * (libs/HatManager.sol: `hatArray[i] = hatArray[len-1]; hatArray.pop()`). Removing a
+ * hat therefore moves the last element into the gap rather than shifting — so the
+ * stored array matches getLensData(5) element-for-element, not merely as a set.
+ * Adding a present hat or removing an absent one is a no-op on-chain (setHatInArray
+ * returns false), and is a no-op here too.
  */
 export function handleHatSet(event: HatSet): void {
   if (event.params.hatType != 0) return;
@@ -888,22 +894,22 @@ export function handleHatSet(event: HatSet): void {
   let allowed = event.params.allowed;
 
   // Copy-mutate-reassign — AssemblyScript array fields don't mutate in place.
-  let current = taskManager.creatorHatIds;
-  let next: BigInt[] = [];
-  let found = false;
-  for (let i = 0; i < current.length; i++) {
-    if (current[i].equals(hatId)) {
-      found = true;
-      if (allowed) {
-        next.push(current[i]); // keep
-      }
-      // if !allowed, drop
-    } else {
-      next.push(current[i]);
+  let next = taskManager.creatorHatIds;
+  let index = -1;
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].equals(hatId)) {
+      index = i;
+      break;
     }
   }
-  if (allowed && !found) {
+
+  if (allowed) {
+    if (index != -1) return; // already present — contract makes no change
     next.push(hatId);
+  } else {
+    if (index == -1) return; // absent — contract makes no change
+    next[index] = next[next.length - 1]; // swap-and-pop, as HatManager does
+    next.pop();
   }
 
   taskManager.creatorHatIds = next;
