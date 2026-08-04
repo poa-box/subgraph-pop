@@ -316,9 +316,13 @@ export function handleNewProposal(event: NewProposal): void {
     }
   }
 
-  // Snapshot the voting-class config version this proposal was created under.
-  // Defaults to 0 if the contract entity or its classVersion is not yet set.
+  // Snapshot the voting-class config this proposal was created under.
+  // classesVersion defaults to 0 if the contract entity or its classVersion is not yet set;
+  // classesChange is the exact pointer, since two setClasses in one block share a version.
   proposal.classesVersion = votingContract ? votingContract.classVersion : BigInt.fromI32(0);
+  if (votingContract) {
+    proposal.classesChange = votingContract.classesChange;
+  }
 
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;
@@ -377,9 +381,13 @@ export function handleNewHatProposal(event: NewHatProposal): void {
     }
   }
 
-  // Snapshot the voting-class config version this proposal was created under.
-  // Defaults to 0 if the contract entity or its classVersion is not yet set.
+  // Snapshot the voting-class config this proposal was created under.
+  // classesVersion defaults to 0 if the contract entity or its classVersion is not yet set;
+  // classesChange is the exact pointer, since two setClasses in one block share a version.
   proposal.classesVersion = votingContract ? votingContract.classVersion : BigInt.fromI32(0);
+  if (votingContract) {
+    proposal.classesChange = votingContract.classesChange;
+  }
 
   proposal.title = event.params.title.toString();
   proposal.descriptionHash = event.params.descriptionHash;
@@ -569,14 +577,45 @@ export function handleClassesReplaced(event: ClassesReplaced): void {
     stale.save();
   }
 
-  // Create VotingClass entities for each class in the new configuration
+  // Immutable record of this emission. Written before the class rows only so changeId is
+  // defined before use — graph-node buffers writes and resolves @derivedFrom at query time,
+  // so the order carries no store-level meaning.
   let classes = event.params.classes;
+  let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let change = new VotingClassChange(changeId);
+
+  change.hybridVoting = event.address;
+  change.version = version;
+  change.logIndex = event.logIndex;
+  change.classesHash = event.params.classesHash;
+  change.numClasses = classes.length;
+  change.changedAt = event.block.timestamp;
+  change.changedAtBlock = event.block.number;
+  change.transactionHash = event.transaction.hash;
+
+  change.save();
+
+  // Create VotingClass entities for each class in the new configuration.
+  // Keyed on the INDEXED coordinates (block, logIndex), not on `version`. `version` is the
+  // contract's block.number, which on Arbitrum is the L1 block — one value there covers ~48 L2
+  // blocks, so several emissions share it. Keying on version would let a later setClasses
+  // overwrite the rows a proposal created earlier was snapshotted against, and VotingClassChange
+  // keeps only the hash, so those contents would be unrecoverable. (block, logIndex) is unique
+  // on every network.
   for (let i = 0; i < classes.length; i++) {
     let classConfig = classes[i];
-    let classId = contractAddress + "-" + version.toString() + "-" + i.toString();
+    let classId =
+      contractAddress +
+      "-" +
+      event.block.number.toString() +
+      "-" +
+      event.logIndex.toString() +
+      "-" +
+      i.toString();
 
     let votingClass = new VotingClass(classId);
     votingClass.hybridVoting = event.address;
+    votingClass.change = changeId;
     votingClass.version = version;
     votingClass.classIndex = i;
 
@@ -600,21 +639,9 @@ export function handleClassesReplaced(event: ClassesReplaced): void {
     votingClass.save();
   }
 
-  // Update contract's classVersion
+  // Update the contract's pointers to the live config. classesChange is the precise one —
+  // classVersion cannot distinguish two setClasses that share a block.
   contract.classVersion = version;
+  contract.classesChange = changeId;
   contract.save();
-
-  // Create immutable VotingClassChange record
-  let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
-  let change = new VotingClassChange(changeId);
-
-  change.hybridVoting = event.address;
-  change.version = version;
-  change.classesHash = event.params.classesHash;
-  change.numClasses = classes.length;
-  change.changedAt = event.block.timestamp;
-  change.changedAtBlock = event.block.number;
-  change.transactionHash = event.transaction.hash;
-
-  change.save();
 }

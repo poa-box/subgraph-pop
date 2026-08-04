@@ -480,7 +480,10 @@ type HybridVotingContract @entity(immutable: false) {
   hats: Bytes!
   createdAt: BigInt!
   createdAtBlock: BigInt!
-  classVersion: BigInt! # Current class configuration version (block number)
+  classVersion: BigInt! # Current class config version — see VotingClass.version; not unique per emission
+  # The ClassesReplaced emission that wrote the live config. Unlike classVersion this IS unique
+  # per emission, so it identifies the live config unambiguously.
+  classesChange: VotingClassChange
   thresholdChanges: [HybridVotingThresholdChange!]! @derivedFrom(field: "hybridVoting")
   quorumChanges: [HybridVotingQuorumChange!]! @derivedFrom(field: "hybridVoting")
   proposals: [Proposal!]! @derivedFrom(field: "hybridVoting")
@@ -496,9 +499,18 @@ enum VotingClassStrategy {
 
 # Voting class configuration for hybrid voting
 type VotingClass @entity(immutable: false) {
-  id: String!                    # hybridVoting-version-classIndex
+  # hybridVoting-indexedBlock-logIndex-classIndex. Keyed on the indexed block and log position,
+  # NOT on version: version is not unique per emission (see below), and keying on it would let a
+  # later setClasses overwrite the config an earlier proposal was snapshotted against.
+  id: String!
   hybridVoting: HybridVotingContract!
-  version: BigInt!               # Class config version (block number)
+  # The emission that wrote this row. Join through this (not version) to reconstruct exactly what
+  # a proposal saw — see Proposal.classesChange.
+  change: VotingClassChange!
+  # The contract's `block.number` at setClasses. NOT an indexed block height and NOT unique per
+  # emission: on Arbitrum One block.number is the L1 block, so one version spans ~48 indexed L2
+  # blocks and several emissions can share it. Use it as an opaque config tag only.
+  version: BigInt!
   classIndex: Int!               # Index in the classes array (0-7)
   strategy: VotingClassStrategy! # DIRECT or ERC20_BAL
   slicePct: Int!                 # 1-100, percentage of total voting power
@@ -506,15 +518,11 @@ type VotingClass @entity(immutable: false) {
   minBalance: BigInt!            # Minimum balance required (for ERC20_BAL)
   asset: Bytes!                  # ERC20 token address (zero for DIRECT)
   hatIds: [BigInt!]!             # Hat IDs that can vote in this class
-  # True only for rows in the config that is live right now. setClasses replaces the whole array on
-  # chain, so every earlier version's rows go false. Strictly narrower than
-  # version == HybridVotingContract.classVersion: version is the block number, so two setClasses in
-  # one block share a version, and rows the second write no longer covers stay false at the live
-  # version.
+  # True only for the rows of the emission that is live right now. setClasses replaces the whole
+  # array on chain, so every earlier emission's rows go false. Strictly narrower than
+  # version == HybridVotingContract.classVersion, because several emissions can share a version.
   # Do NOT filter on this when reconstructing the config a proposal was created under — superseded
-  # rows are retained on purpose and are what Proposal.classesVersion points at. Match on version;
-  # if that version was written twice in one block, the last VotingClassChange for it carries the
-  # numClasses that were actually in force.
+  # rows are retained on purpose. Join via Proposal.classesChange, which is exact.
   isActive: Boolean!
   createdAt: BigInt!
   createdAtBlock: BigInt!
@@ -525,9 +533,15 @@ type VotingClass @entity(immutable: false) {
 type VotingClassChange @entity(immutable: true) {
   id: Bytes!                     # txHash-logIndex
   hybridVoting: HybridVotingContract!
-  version: BigInt!               # Block number used as version
+  version: BigInt!               # The contract's block.number — see VotingClass.version; not unique
+  # Log position within the INDEXED block. To order emissions that share a version, sort by
+  # (changedAtBlock, logIndex) — logIndex alone is meaningless across blocks.
+  logIndex: BigInt!
   classesHash: Bytes!            # Hash of the classes array
   numClasses: Int!               # Number of classes in this version
+  # The config this emission wrote. Immutable and collision-free, so this is the only join that
+  # reconstructs a same-block-superseded config exactly.
+  votingClasses: [VotingClass!]! @derivedFrom(field: "change")
   changedAt: BigInt!
   changedAtBlock: BigInt!
   transactionHash: Bytes!
@@ -568,6 +582,11 @@ type Proposal @entity(immutable: false) {
   proposer: Bytes! # alias of creator (frontend-facing name); populated identically from transaction.from
   proposerUsername: String # alias of creatorUsername; resolved via getUsernameForAddress
   classesVersion: BigInt! # HybridVotingContract.classVersion snapshotted at creation — the voting-class config this proposal was created under (for result-drift-safe tallying)
+  # The exact ClassesReplaced emission in force when this proposal was created. Prefer this over
+  # classesVersion when reconstructing the config: several emissions can share a version (see
+  # VotingClass.version), and only this distinguishes them. Read the rows via
+  # classesChange { votingClasses }. Null only for proposals created before any indexed class change.
+  classesChange: VotingClassChange
   title: String! # proposal title
   descriptionHash: Bytes! # hash of proposal description (IPFS CID as bytes32)
   metadata: ProposalMetadata # Fetched from IPFS - contains description and option names
