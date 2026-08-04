@@ -51,15 +51,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   taskManager.createdAtBlock = event.block.number;
   taskManager.transactionHash = event.transaction.hash;
 
-  // Derive creatorHatIds from roleHatIds
-  // Standard config: taskCreatorRoles = 0b110 (executives + admins = all non-member roles)
-  // This means roleHatIds[0] = member, roleHatIds[1:] = creator-eligible roles
-  let roleHatIds = event.params.roleHatIds;
-  let creatorHatIds: BigInt[] = [];
-  for (let i = 1; i < roleHatIds.length; i++) {
-    creatorHatIds.push(roleHatIds[i]);
-  }
-  taskManager.creatorHatIds = creatorHatIds;
+  taskManager.creatorHatIds = []; // populated by HatSet events (see task-manager.ts handleHatSet)
   taskManager.organizerHatIds = []; // populated by OrganizerHatAllowed events (TaskManager v4)
 
   // Create HybridVotingContract entity
@@ -199,7 +191,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   // Create Role entities for user-defined roleHatIds only (not for topHatId which is a system hat)
   // This allows querying roles before Hat entities are created by EligibilityModule
   // Note: We do NOT create a Role for topHatId as it's a system hat (worn by Executor)
-  // roleHatIds is already declared above for creatorHatIds derivation
+  let roleHatIds = event.params.roleHatIds;
   for (let i = 0; i < roleHatIds.length; i++) {
     getOrCreateRole(event.params.orgId, roleHatIds[i], event, true, true); // isUserRole = true, setIsUserRole = true
   }

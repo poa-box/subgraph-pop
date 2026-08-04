@@ -266,10 +266,15 @@ describe("OrgDeployer", () => {
   });
 
   // ========================================
-  // creatorHatIds Derivation Tests
+  // creatorHatIds Seeding Tests
   // ========================================
 
-  test("TaskManager.creatorHatIds derived from roleHatIds[1:]", () => {
+  // creatorHatIds is NOT derivable from OrgDeployed: the contract picks the set via
+  // taskCreatorRolesBitmap (RoleResolver.resolveRoleBitmap — bit N => roleHatIds[N]),
+  // and that bitmap is not in the event. The old roleHatIds[1:] heuristic was wrong for
+  // 9/9 live Gnosis orgs (issue #203). TaskManager.HatSet is the sole source of truth;
+  // handleOrgDeployed just seeds an empty array. See task-manager.ts handleHatSet.
+  test("TaskManager.creatorHatIds seeded empty regardless of roleHatIds", () => {
     let orgId = Bytes.fromHexString(
       "0xaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
     );
@@ -305,13 +310,13 @@ describe("OrgDeployer", () => {
 
     handleOrgDeployed(orgDeployedEvent);
 
-    // Verify creatorHatIds is roleHatIds[1:] = [1002, 1003]
+    // Empty at deploy even though roleHatIds has non-member roles — HatSet fills it.
     // Matchstick compares arrays as comma-separated strings
     assert.fieldEquals(
       "TaskManager",
       "0x0000000000000000000000000000000000000006",
       "creatorHatIds",
-      "[1002, 1003]"
+      "[]"
     );
     // organizerHatIds (v4) is initialized empty; populated later by OrganizerHatAllowed events.
     assert.fieldEquals(
@@ -319,102 +324,6 @@ describe("OrgDeployer", () => {
       "0x0000000000000000000000000000000000000006",
       "organizerHatIds",
       "[]"
-    );
-  });
-
-  test("TaskManager.creatorHatIds empty when only member role in roleHatIds", () => {
-    let orgId = Bytes.fromHexString(
-      "0x1111222233334444111122223333444411112222333344441111222233334444"
-    );
-    let executor = Address.fromString("0x0000000000000000000000000000000000000011");
-    let hybridVoting = Address.fromString("0x0000000000000000000000000000000000000012");
-    let directDemocracyVoting = Address.fromString("0x0000000000000000000000000000000000000013");
-    let quickJoin = Address.fromString("0x0000000000000000000000000000000000000014");
-    let participationToken = Address.fromString("0x0000000000000000000000000000000000000015");
-    let taskManager = Address.fromString("0x0000000000000000000000000000000000000016");
-    let educationHub = Address.fromString("0x0000000000000000000000000000000000000017");
-    let paymentManager = Address.fromString("0x0000000000000000000000000000000000000018");
-    let eligibilityModule = Address.fromString("0x0000000000000000000000000000000000000019");
-    let toggleModule = Address.fromString("0x000000000000000000000000000000000000001a");
-    let topHatId = BigInt.fromI32(2000);
-    // Only member role - no creator-eligible roles
-    let roleHatIds = [BigInt.fromI32(2001)];
-
-    let orgDeployedEvent = createOrgDeployedEvent(
-      orgId,
-      executor,
-      hybridVoting,
-      directDemocracyVoting,
-      quickJoin,
-      participationToken,
-      taskManager,
-      educationHub,
-      paymentManager,
-      eligibilityModule,
-      toggleModule,
-      topHatId,
-      roleHatIds
-    );
-
-    handleOrgDeployed(orgDeployedEvent);
-
-    // Verify creatorHatIds is empty array (roleHatIds[1:] = [])
-    assert.fieldEquals(
-      "TaskManager",
-      "0x0000000000000000000000000000000000000016",
-      "creatorHatIds",
-      "[]"
-    );
-  });
-
-  test("TaskManager.creatorHatIds with many non-member roles", () => {
-    let orgId = Bytes.fromHexString(
-      "0x5555666677778888555566667777888855556666777788885555666677778888"
-    );
-    let executor = Address.fromString("0x0000000000000000000000000000000000000021");
-    let hybridVoting = Address.fromString("0x0000000000000000000000000000000000000022");
-    let directDemocracyVoting = Address.fromString("0x0000000000000000000000000000000000000023");
-    let quickJoin = Address.fromString("0x0000000000000000000000000000000000000024");
-    let participationToken = Address.fromString("0x0000000000000000000000000000000000000025");
-    let taskManager = Address.fromString("0x0000000000000000000000000000000000000026");
-    let educationHub = Address.fromString("0x0000000000000000000000000000000000000027");
-    let paymentManager = Address.fromString("0x0000000000000000000000000000000000000028");
-    let eligibilityModule = Address.fromString("0x0000000000000000000000000000000000000029");
-    let toggleModule = Address.fromString("0x000000000000000000000000000000000000002a");
-    let topHatId = BigInt.fromI32(3000);
-    // 5 roles: member (3001), plus 4 non-member roles
-    let roleHatIds = [
-      BigInt.fromI32(3001), // member
-      BigInt.fromI32(3002), // admin
-      BigInt.fromI32(3003), // executive
-      BigInt.fromI32(3004), // moderator
-      BigInt.fromI32(3005)  // reviewer
-    ];
-
-    let orgDeployedEvent = createOrgDeployedEvent(
-      orgId,
-      executor,
-      hybridVoting,
-      directDemocracyVoting,
-      quickJoin,
-      participationToken,
-      taskManager,
-      educationHub,
-      paymentManager,
-      eligibilityModule,
-      toggleModule,
-      topHatId,
-      roleHatIds
-    );
-
-    handleOrgDeployed(orgDeployedEvent);
-
-    // Verify creatorHatIds includes all non-member roles [3002, 3003, 3004, 3005]
-    assert.fieldEquals(
-      "TaskManager",
-      "0x0000000000000000000000000000000000000026",
-      "creatorHatIds",
-      "[3002, 3003, 3004, 3005]"
     );
   });
 

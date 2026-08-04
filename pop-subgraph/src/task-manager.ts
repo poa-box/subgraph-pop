@@ -20,6 +20,7 @@ import {
   FoldersUpdated,
   OrganizerHatAllowed,
   RolePermSet,
+  HatSet,
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
   TaskClaimExpired,
@@ -859,6 +860,53 @@ export function handleOrganizerHatAllowed(event: OrganizerHatAllowed): void {
   }
 
   taskManager.organizerHatIds = next;
+  taskManager.save();
+}
+
+/**
+ * Handles the HatSet event from a TaskManager contract.
+ * Mutates the denormalized creatorHatIds array (hats allowed to create projects).
+ *
+ * The contract emits HatSet(HatType.CREATOR, hat, allowed) from both of its only
+ * two writers of creatorHatIds: once per seeded hat inside initialize(), and again
+ * on setConfig(CREATOR_HAT_ALLOWED). The deploy-time emissions precede OrgDeployed
+ * in the same block, and graph-node replays a block's earlier triggers to templates
+ * created mid-block — so these events are the complete source of truth, including
+ * for the initial set. handleOrgDeployed therefore seeds creatorHatIds to [].
+ *
+ * hatType is CREATOR (0) in every deployed version; guard so a future variant can't
+ * silently pollute the array. Same add/remove/no-op semantics as
+ * handleOrganizerHatAllowed, mirroring the contract's HatManager.setHatInArray.
+ */
+export function handleHatSet(event: HatSet): void {
+  if (event.params.hatType != 0) return;
+
+  let taskManager = TaskManager.load(event.address);
+  if (!taskManager) return;
+
+  let hatId = event.params.hat;
+  let allowed = event.params.allowed;
+
+  // Copy-mutate-reassign — AssemblyScript array fields don't mutate in place.
+  let current = taskManager.creatorHatIds;
+  let next: BigInt[] = [];
+  let found = false;
+  for (let i = 0; i < current.length; i++) {
+    if (current[i].equals(hatId)) {
+      found = true;
+      if (allowed) {
+        next.push(current[i]); // keep
+      }
+      // if !allowed, drop
+    } else {
+      next.push(current[i]);
+    }
+  }
+  if (allowed && !found) {
+    next.push(hatId);
+  }
+
+  taskManager.creatorHatIds = next;
   taskManager.save();
 }
 
