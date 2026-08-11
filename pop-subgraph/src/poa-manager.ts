@@ -6,6 +6,7 @@ import {
   InfrastructureDeployed as InfrastructureDeployedEvent
 } from "../generated/PoaManager/PoaManager";
 import { PaymasterHub as PaymasterHubContract } from "../generated/templates/PaymasterHub/PaymasterHub";
+import { PaymasterHubLegacyOnboarding as PaymasterHubLegacyOnboardingContract } from "../generated/PoaManager/PaymasterHubLegacyOnboarding";
 import {
   PoaManagerContract,
   Beacon,
@@ -205,19 +206,52 @@ export function handleInfrastructureDeployed(event: InfrastructureDeployedEvent)
 
   hub.save();
 
-  // Read onboarding config (set via adminCall before template existed)
+  // Read onboarding config (set via adminCall before template existed).
+  //
+  // Two tuple shapes are both live: POP #175 appended `uint8 maxOnboardingsPerAccount` as a 7th
+  // field. This call is pinned to the historical InfrastructureDeployed block, which predates
+  // #175 on arbitrum-one (447060027) and gnosis (45408029) and returns 6 fields, while any chain
+  // deployed from now on returns 7.
+  //
+  // The ORDER below is load-bearing, verified by decoding the real on-chain returns:
+  //   - v20 ABI vs a 6-field return  -> hard failure ("buffer overrun"), so the fallback fires.
+  //   - legacy ABI vs a 7-field return -> SILENTLY SUCCEEDS; the decoder tolerates trailing data
+  //     and simply drops the cap.
+  // So the v20 shape must be attempted FIRST. Legacy-first would decode on every chain and
+  // permanently report maxOnboardingsPerAccount = 0 — wrong, and invisibly so.
+  //
+  // 0 is the honest value on the pre-#175 path: no per-account cap existed, and 0 == unlimited.
   let onboardingResult = paymasterContract.try_getOnboardingConfig();
   if (!onboardingResult.reverted) {
     let onboardingConfig = new OnboardingConfig(paymasterAddress);
     onboardingConfig.paymasterHub = paymasterAddress;
     onboardingConfig.maxGasPerCreation = onboardingResult.value.maxGasPerCreation;
     onboardingConfig.dailyCreationLimit = onboardingResult.value.dailyCreationLimit;
+    onboardingConfig.maxOnboardingsPerAccount = onboardingResult.value.maxOnboardingsPerAccount;
     onboardingConfig.enabled = onboardingResult.value.enabled;
     onboardingConfig.accountRegistry = onboardingResult.value.accountRegistry;
     onboardingConfig.updatedAt = event.block.timestamp;
     onboardingConfig.blockNumber = event.block.number;
     onboardingConfig.transactionHash = event.transaction.hash;
     onboardingConfig.save();
+  } else {
+    let legacyContract = PaymasterHubLegacyOnboardingContract.bind(
+      Address.fromBytes(paymasterAddress)
+    );
+    let legacyResult = legacyContract.try_getOnboardingConfig();
+    if (!legacyResult.reverted) {
+      let onboardingConfig = new OnboardingConfig(paymasterAddress);
+      onboardingConfig.paymasterHub = paymasterAddress;
+      onboardingConfig.maxGasPerCreation = legacyResult.value.maxGasPerCreation;
+      onboardingConfig.dailyCreationLimit = legacyResult.value.dailyCreationLimit;
+      onboardingConfig.maxOnboardingsPerAccount = 0; // field did not exist pre-#175
+      onboardingConfig.enabled = legacyResult.value.enabled;
+      onboardingConfig.accountRegistry = legacyResult.value.accountRegistry;
+      onboardingConfig.updatedAt = event.block.timestamp;
+      onboardingConfig.blockNumber = event.block.number;
+      onboardingConfig.transactionHash = event.transaction.hash;
+      onboardingConfig.save();
+    }
   }
 
   // Read org deploy config (set via adminCall before template existed)

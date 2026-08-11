@@ -2656,6 +2656,13 @@ type OnboardingConfig @entity(immutable: false) {
   paymasterHub: PaymasterHubContract!
   maxGasPerCreation: BigInt!
   dailyCreationLimit: BigInt!
+  """
+  Lifetime cap on sponsored onboardings per sender; 0 means UNLIMITED, which is also the
+  correct reading for any state that predates POP #175 (2026-06-15) — no per-account cap
+  existed before it, so the deploy-time backfill leaves this 0 on both live chains until
+  the first post-upgrade OnboardingConfigUpdated arrives.
+  """
+  maxOnboardingsPerAccount: Int!
   enabled: Boolean!
   accountRegistry: Bytes!
   updatedAt: BigInt!

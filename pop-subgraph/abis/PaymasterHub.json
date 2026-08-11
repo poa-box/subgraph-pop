@@ -299,6 +299,11 @@
             "name": "accountRegistry",
             "type": "address",
             "internalType": "address"
+          },
+          {
+            "name": "maxOnboardingsPerAccount",
+            "type": "uint8",
+            "internalType": "uint8"
           }
         ]
       }
@@ -1336,6 +1341,12 @@
         "type": "uint128",
         "indexed": false,
         "internalType": "uint128"
+      },
+      {
+        "name": "maxOnboardingsPerAccount",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
       },
       {
         "name": "enabled",

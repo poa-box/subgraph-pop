@@ -7,7 +7,8 @@ import {
   GlobalRuleSet,
   TargetTypeSet,
   RulesModeSet,
-  GlobalRuleBlockSet
+  GlobalRuleBlockSet,
+  OnboardingConfigUpdated
 } from "../generated/templates/PaymasterHub/PaymasterHub";
 
 // Every PaymasterHub entity id is keyed off event.address, so each builder MUST set it.
@@ -133,6 +134,45 @@ export function createRulesModeSetEvent(hub: Address, orgId: Bytes, mode: i32): 
   event.parameters.push(new ethereum.EventParam("orgId", ethereum.Value.fromFixedBytes(orgId)));
   event.parameters.push(
     new ethereum.EventParam("mode", ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(mode)))
+  );
+
+  return event;
+}
+
+// POP #175 shape: maxOnboardingsPerAccount is the THIRD arg, not appended at the end.
+export function createOnboardingConfigUpdatedEvent(
+  hub: Address,
+  maxGasPerCreation: BigInt,
+  dailyCreationLimit: BigInt,
+  maxOnboardingsPerAccount: i32,
+  enabled: boolean,
+  accountRegistry: Address
+): OnboardingConfigUpdated {
+  let event = changetype<OnboardingConfigUpdated>(newMockEvent());
+  event.address = hub;
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam(
+      "maxGasPerCreation",
+      ethereum.Value.fromUnsignedBigInt(maxGasPerCreation)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "dailyCreationLimit",
+      ethereum.Value.fromUnsignedBigInt(dailyCreationLimit)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "maxOnboardingsPerAccount",
+      ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(maxOnboardingsPerAccount))
+    )
+  );
+  event.parameters.push(new ethereum.EventParam("enabled", ethereum.Value.fromBoolean(enabled)));
+  event.parameters.push(
+    new ethereum.EventParam("accountRegistry", ethereum.Value.fromAddress(accountRegistry))
   );
 
   return event;

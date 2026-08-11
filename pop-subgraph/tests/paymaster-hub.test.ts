@@ -16,6 +16,7 @@ import {
   handleTargetTypeSet,
   handleRulesModeSet,
   handleGlobalRuleBlockSet,
+  handleOnboardingConfigUpdated,
   backfillGlobalRulebook
 } from "../src/paymaster-hub";
 import {
@@ -25,7 +26,8 @@ import {
   createGlobalRuleSetEvent,
   createTargetTypeSetEvent,
   createRulesModeSetEvent,
-  createGlobalRuleBlockSetEvent
+  createGlobalRuleBlockSetEvent,
+  createOnboardingConfigUpdatedEvent
 } from "./paymaster-hub-utils";
 
 // Matchstick's default mock event address — also the hub address for every test here.
@@ -33,6 +35,7 @@ const HUB = Address.fromString("0xa16081f360e3847006db660bae1c6d1b2e17ec2a");
 const ENTRY_POINT = Address.fromString("0x0000000071727de22e5e9d8baf0edac6f37da032");
 const HATS = Address.fromString("0x3bc1a0ad72417f2d411118085256fc53cbddd137");
 const POA_MANAGER = Address.fromString("0x00000000000000000000000000000000000000a1");
+const ACCOUNT_REGISTRY = Address.fromString("0x55f72ceb09cbc1faaed734b6505b99b0a1dfa1ca");
 
 const ORG_ID = Bytes.fromHexString(
   "0x1111111111111111111111111111111111111111111111111111111111111111"
@@ -553,6 +556,74 @@ describe("PaymasterHub global rulebook", () => {
       );
 
       assert.entityCount("PaymasterGlobalRule", 0);
+    });
+  });
+
+  describe("handleOnboardingConfigUpdated", () => {
+    // POP #175 inserted uint8 maxOnboardingsPerAccount as the THIRD arg, changing topic0. The
+    // manifest carried the old 4-arg signature, so this handler never fired post-#175 — the live
+    // updates at gnosis 46714737 and arbitrum 473859884 were dropped.
+    test("indexes the v20 5-arg payload, including the per-account cap", () => {
+      handleOnboardingConfigUpdated(
+        createOnboardingConfigUpdatedEvent(
+          HUB,
+          BigInt.fromString("10000000000000000"), // 0.01 ETH, the live value on both chains
+          BigInt.fromI32(1000),
+          3, // the live maxOnboardingsPerAccount on both chains
+          true,
+          ACCOUNT_REGISTRY
+        )
+      );
+
+      let id = HUB.toHexString();
+      assert.entityCount("OnboardingConfig", 1);
+      assert.fieldEquals("OnboardingConfig", id, "maxGasPerCreation", "10000000000000000");
+      assert.fieldEquals("OnboardingConfig", id, "dailyCreationLimit", "1000");
+      assert.fieldEquals("OnboardingConfig", id, "maxOnboardingsPerAccount", "3");
+      assert.fieldEquals("OnboardingConfig", id, "enabled", "true");
+      assert.fieldEquals("OnboardingConfig", id, "accountRegistry", ACCOUNT_REGISTRY.toHexString());
+    });
+
+    test("0 means unlimited and round-trips as a real value, not an absent one", () => {
+      handleOnboardingConfigUpdated(
+        createOnboardingConfigUpdatedEvent(
+          HUB,
+          BigInt.fromI32(200000),
+          BigInt.fromI32(500),
+          0,
+          false,
+          ACCOUNT_REGISTRY
+        )
+      );
+
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "maxOnboardingsPerAccount", "0");
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "enabled", "false");
+    });
+
+    test("a later update overwrites the cap in place", () => {
+      handleOnboardingConfigUpdated(
+        createOnboardingConfigUpdatedEvent(
+          HUB,
+          BigInt.fromI32(200000),
+          BigInt.fromI32(500),
+          0,
+          true,
+          ACCOUNT_REGISTRY
+        )
+      );
+      handleOnboardingConfigUpdated(
+        createOnboardingConfigUpdatedEvent(
+          HUB,
+          BigInt.fromI32(200000),
+          BigInt.fromI32(500),
+          3,
+          true,
+          ACCOUNT_REGISTRY
+        )
+      );
+
+      assert.entityCount("OnboardingConfig", 1);
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "maxOnboardingsPerAccount", "3");
     });
   });
 });

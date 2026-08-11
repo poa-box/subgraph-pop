@@ -47,6 +47,13 @@ dataSources:
           file: ./abis/PoaManager.json
         - name: PaymasterHub
           file: ./abis/PaymasterHub.json
+        # getOnboardingConfig() grew a 7th tuple field in POP #175. handleInfrastructureDeployed
+        # calls it at a HISTORICAL block, which on arbitrum-one (447060027) and gnosis (45408029)
+        # predates that upgrade and returns only 6 fields — the v20 arity cannot decode that
+        # (buffer overrun). This shim carries the pre-#175 shape; poa-manager.ts tries the v20
+        # shape first and falls back to it. See the ordering note there — it is not arbitrary.
+        - name: PaymasterHubLegacyOnboarding
+          file: ./abis/PaymasterHubLegacyOnboarding.json
       eventHandlers:
         - event: BeaconCreated(indexed bytes32,string,address,address)
           handler: handleBeaconCreated
@@ -336,7 +343,14 @@ templates:
           handler: handleSolidarityDistributionUnpaused
         - event: OnboardingAccountCreated(indexed address,uint256)
           handler: handleOnboardingAccountCreated
-        - event: OnboardingConfigUpdated(uint128,uint128,bool,address)
+        # POP #175 inserted `uint8 maxOnboardingsPerAccount` as the 3rd arg, changing topic0 from
+        # 0x81434e0d… to 0x118af811…. The old 4-arg signature was declared here until now, so this
+        # handler had never fired against a post-#175 implementation. Not declared as an extra
+        # signature: the only 4-arg logs on either chain (gnosis 45408022, arbitrum 447060001) are
+        # emitted by the deploy script BEFORE InfrastructureDeployed creates this template, so they
+        # are cross-block and unreachable regardless — handleInfrastructureDeployed reads that
+        # initial state directly instead.
+        - event: OnboardingConfigUpdated(uint128,uint128,uint8,bool,address)
           handler: handleOnboardingConfigUpdated
         - event: OrgDeployConfigUpdated(uint128,uint128,uint8,bool,address)
           handler: handleOrgDeployConfigUpdated

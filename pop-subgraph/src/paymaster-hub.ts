@@ -736,7 +736,18 @@ export function handleOnboardingAccountCreated(event: OnboardingAccountCreatedEv
   entity.save();
 }
 
-// 26. OnboardingConfigUpdated - Onboarding limits changed
+/**
+ * 26. OnboardingConfigUpdated - Onboarding limits changed.
+ *
+ * POP #175 inserted `uint8 maxOnboardingsPerAccount` as the THIRD argument, which changed topic0
+ * (0x81434e0d… -> 0x118af811…). subgraph.yaml carried the old 4-arg signature until now, so this
+ * handler never fired against a post-#175 implementation: the live config updates at gnosis
+ * 46714737 and arbitrum 473859884 were both dropped on the floor.
+ *
+ * maxOnboardingsPerAccount is 0 == UNLIMITED, which is also the honest value for the pre-#175
+ * window where the field did not exist — so the deploy-time backfill in poa-manager.ts can seed 0
+ * without asserting a cap that was never configured.
+ */
 export function handleOnboardingConfigUpdated(event: OnboardingConfigUpdatedEvent): void {
   let config = OnboardingConfig.load(event.address);
   if (!config) {
@@ -745,6 +756,7 @@ export function handleOnboardingConfigUpdated(event: OnboardingConfigUpdatedEven
   }
   config.maxGasPerCreation = event.params.maxGasPerCreation;
   config.dailyCreationLimit = event.params.dailyCreationLimit;
+  config.maxOnboardingsPerAccount = event.params.maxOnboardingsPerAccount;
   config.enabled = event.params.enabled;
   config.accountRegistry = event.params.accountRegistry;
   config.updatedAt = event.block.timestamp;

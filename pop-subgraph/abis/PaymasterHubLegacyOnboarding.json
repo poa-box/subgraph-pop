@@ -1,0 +1,47 @@
+[
+  {
+    "type": "function",
+    "name": "getOnboardingConfig",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct PaymasterHub.OnboardingConfig",
+        "components": [
+          {
+            "name": "maxGasPerCreation",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "dailyCreationLimit",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "attemptsToday",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "currentDay",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "enabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "accountRegistry",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  }
+]
