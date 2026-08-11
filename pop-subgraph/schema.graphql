@@ -1847,6 +1847,25 @@ enum ConfigChangeType {
   PauseSet
   RuleSet
   BudgetSet
+  GlobalRuleSet # hub-level: protocol rulebook entry set/removed (orgConfig is null)
+  TargetTypeSet # per-org: target address mapped to a module typeId
+  RulesModeSet # per-org: Mirror <-> Static
+  GlobalRuleBlockSet # per-org: veto of one (target, selector) global rule
+}
+
+"""
+How an org resolves paymaster sponsorship rules (PaymasterHub v20).
+- Mirror (on-chain 0): local rule first, then the protocol-wide global rulebook.
+  This is the DEFAULT for every org that never emitted RulesModeSet — which is every
+  org registered before v20, since neither registerOrg nor the legacy
+  registerAndConfigureOrg overload emits it.
+- Static (on-chain 1): local rules only; the global rulebook is ignored.
+OrgDeployer sets rulesMode = autoUpgrade ? Mirror : Static, so this switch tracks the
+SwitchableBeacon Mirror/Static vocabulary on purpose.
+"""
+enum PaymasterRulesMode {
+  Mirror
+  Static
 }
 
 # 1. PaymasterHubContract - Singleton contract entity
@@ -1872,6 +1891,7 @@ type PaymasterHubContract @entity(immutable: false) {
   configChanges: [PaymasterConfigChange!]! @derivedFrom(field: "paymasterHub")
   gracePeriodChanges: [GracePeriodChange!]! @derivedFrom(field: "paymasterHub")
   onboardingAccounts: [OnboardingAccount!]! @derivedFrom(field: "paymasterHub")
+  globalRules: [PaymasterGlobalRule!]! @derivedFrom(field: "paymasterHub")
 }
 
 # 2. PaymasterOrgConfig - Per-organization configuration
@@ -1884,6 +1904,15 @@ type PaymasterOrgConfig @entity(immutable: false) {
   operatorHatId: BigInt!
   isPaused: Boolean!
   isBannedFromSolidarity: Boolean!
+  """
+  Mirror (default) or Static. MUTABLE AT ANY TIME — do not cache it. RulesModeSet is emitted
+  both by the runtime setter PaymasterHub.setRulesMode() (org admin/operator/poaManager gated)
+  and by the v20 registerAndConfigureOrg overload at deploy time. It is NOT emitted by
+  registerOrg or the legacy overload, so orgs that predate the v20 upgrade have no
+  RulesModeSet at all and are correctly left at the Mirror default assigned in
+  handleOrgRegistered.
+  """
+  rulesMode: PaymasterRulesMode!
   depositBalance: BigInt!
   totalDeposited: BigInt!
   totalSpent: BigInt! # Amount spent from org's own deposits (excludes solidarity subsidy)
@@ -1901,8 +1930,27 @@ type PaymasterOrgConfig @entity(immutable: false) {
   configChanges: [PaymasterConfigChange!]! @derivedFrom(field: "orgConfig")
   pauseToggles: [PauseToggle!]! @derivedFrom(field: "orgConfig")
   banRecords: [OrgBanRecord!]! @derivedFrom(field: "orgConfig")
+  targetTypes: [PaymasterTargetType!]! @derivedFrom(field: "orgConfig")
+  globalRuleBlocks: [PaymasterGlobalRuleBlock!]! @derivedFrom(field: "orgConfig")
+  rulesModeChanges: [PaymasterRulesModeChange!]! @derivedFrom(field: "orgConfig")
 }
 
+"""
+LOCAL per-org rule — a direct mirror of PaymasterHub's `rules[orgId][target][selector]`
+storage slot. This is NOT the effective sponsorship decision: from v20 a Mirror-mode org
+also resolves through PaymasterGlobalRule / PaymasterTargetType / PaymasterGlobalRuleBlock.
+The full resolution algorithm is documented on PaymasterGlobalRule.
+
+The two fields are load-bearing and not interchangeable:
+- allowed=true                     -> ALLOW; maxCallGasHint applies.
+- allowed=false, maxCallGasHint=0  -> UNSET. Byte-identical on-chain to a deleted rule
+                                      (clearRule writes exactly this), so a Mirror org
+                                      falls through to the global rulebook.
+- allowed=false, maxCallGasHint!=0 -> EXPLICIT DENY that short-circuits the global fallback.
+
+This row is never deleted; clearRule upserts it to {false, 0}, matching the on-chain
+post-state exactly.
+"""
 # 3. PaymasterRule - Target/selector permissions
 type PaymasterRule @entity(immutable: false) {
   id: String! # paymasterHub-orgId-target-selector
@@ -1911,6 +1959,105 @@ type PaymasterRule @entity(immutable: false) {
   selector: Bytes! # bytes4
   allowed: Boolean!
   maxCallGasHint: Int!
+  setAt: BigInt!
+  setAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Protocol-wide global rulebook entry, keyed by (module typeId, selector). HUB-SCOPED — the
+GlobalRuleSet event carries NO orgId. One entry covers the matching module of EVERY
+Mirror-mode org that has mapped some address to this typeId via PaymasterTargetType.
+
+typeId is the same keccak256(moduleName) identifier OrgRegistry uses for
+RegisteredContract.typeId, so a client can join on it. The two protocol singletons
+UniversalAccountRegistry and OrgRegistry have no RegisteredContract row — use moduleName.
+
+allowed=false is a REMOVAL, not a deny: the contract deletes the storage entry, pops it from
+the enumeration, and forces maxCallGasHint to 0 in the emit. The row is tombstoned rather
+than deleted so history and reverse lookups stay queryable; an absent row and a row with
+allowed=false both mean "no global grant".
+
+EFFECTIVE RULE for (orgId, target, selector), mirroring PaymasterRuleLib._resolveRule and
+PaymasterHubLens._effectiveRule exactly (fail-closed at every step):
+  L = PaymasterRule[hub-orgId-target-selector]   (absent => allowed:false, hint:0)
+  1. L.allowed                                            -> ALLOW (hint = L.maxCallGasHint, source=local)
+  2. L.maxCallGasHint != 0                                -> DENY  (explicit deny)
+  3. PaymasterOrgConfig.rulesMode == Static               -> DENY
+  4. PaymasterGlobalRuleBlock[same id as L].blocked       -> DENY
+  5. T = PaymasterTargetType[hub-orgId-target].typeId;
+     T == 0x00..0 or row absent                           -> DENY
+  6. G = PaymasterGlobalRule[hub-T-selector];
+     G absent or !G.allowed                               -> DENY
+  7. otherwise                                            -> ALLOW (hint = G.maxCallGasHint, source=global)
+
+Coarse-mode userOps (ruleId 0x000000FF) target the ACCOUNT address, which is never
+target-typed, so step 5 always denies — coarse sponsorship resolves from PaymasterRule alone.
+"""
+type PaymasterGlobalRule @entity(immutable: false) {
+  id: String! # paymasterHub-typeId-selector
+  paymasterHub: PaymasterHubContract!
+  typeId: Bytes! # keccak256(moduleName); same ids as RegisteredContract.typeId
+  moduleName: String # resolved from the ModuleTypes table; null if the typeId is unknown
+  selector: Bytes! # bytes4
+  allowed: Boolean! # false == entry removed from the rulebook (tombstone)
+  maxCallGasHint: Int! # always 0 when allowed == false (the contract forces it)
+  setAt: BigInt!
+  setAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Per-org mapping of a target ADDRESS to a module typeId. Without this row a target resolves
+NO global rules at all (step 5 of the resolution algorithm) — the rulebook is inert for an
+org until its targets are typed.
+
+Keyed by (hub, orgId, target) and NOT by target alone: UniversalAccountRegistry and
+OrgRegistry are chain-shared singletons, so the SAME address is target-typed under every orgId.
+
+typeId == 0x00..0 means the mapping was CLEARED; `cleared` is a precomputed convenience flag.
+"""
+type PaymasterTargetType @entity(immutable: false) {
+  id: String! # paymasterHub-orgId-target
+  orgConfig: PaymasterOrgConfig!
+  target: Bytes!
+  typeId: Bytes! # 0x00..0 when cleared
+  moduleName: String # null when cleared or unknown
+  cleared: Boolean! # typeId == bytes32(0)
+  setAt: BigInt!
+  setAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Per-org veto of one (target, selector) pair's GLOBAL rule, without leaving Mirror mode.
+An explicit local allow (PaymasterRule.allowed=true) still wins — this only gates the
+global fallback (step 4 of the resolution algorithm).
+
+ID NOTE: the id string is intentionally IDENTICAL to the PaymasterRule id for the same
+(hub, orgId, target, selector). Entity ids are namespaced per type in graph-node, so this is
+legal and lets a client fetch both halves of the pair with one key. Do not "fix" it by
+adding a prefix.
+
+Written both by the dedicated setGlobalRuleBlock() and, from v20, automatically as a SEPARATE
+LOG paired with RuleSet: setRule(allowed=false) also sets the block (otherwise a Mirror org's
+revocation would silently fall through to the rulebook and un-revoke itself); setRule
+(allowed=true) and clearRule clear a standing block. The paired GlobalRuleBlockSet always has
+a higher logIndex than its RuleSet, but the two handlers write different entities so dispatch
+order is irrelevant. This row can exist with NO PaymasterRule row — the v20 migration
+reconstructs pre-v20 denials by emitting blocks alone.
+
+KNOWN CONTRACT QUIRK: snapshotGlobalRules() and adoptGlobalRules() both write local allows but
+do NOT clear standing blocks, so blocked=true can legitimately coexist with
+PaymasterRule.allowed=true. Resolution step 1 wins, so this is harmless — but never read
+blocked=true as "denied" on its own; always evaluate the full algorithm in order.
+"""
+type PaymasterGlobalRuleBlock @entity(immutable: false) {
+  id: String! # paymasterHub-orgId-target-selector (same string as the matching PaymasterRule)
+  orgConfig: PaymasterOrgConfig!
+  target: Bytes!
+  selector: Bytes! # bytes4
+  blocked: Boolean!
   setAt: BigInt!
   setAtBlock: BigInt!
   transactionHash: Bytes!
@@ -2058,6 +2205,24 @@ type OrgBanRecord @entity(immutable: true) {
   banned: Boolean!
   bannedAt: BigInt!
   bannedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+"""
+Immutable history of RulesModeSet. Mirrors the PauseToggle / OrgBanRecord pattern: rulesMode
+lives as a single overwritten field on PaymasterOrgConfig, so without this entity the history
+would be lost. The v20 registerAndConfigureOrg overload emits RulesModeSet unconditionally —
+even for mode 0, where no storage write happens — so an org deploy produces exactly one of
+these rows.
+"""
+# 17. PaymasterRulesModeChange - Mirror/Static history for an org
+type PaymasterRulesModeChange @entity(immutable: true) {
+  id: Bytes! # txHash.concatI32(logIndex)
+  orgConfig: PaymasterOrgConfig!
+  mode: PaymasterRulesMode!
+  modeRaw: Int! # raw uint8 from the event; 0 = Mirror, 1 = Static
+  changedAt: BigInt!
+  changedAtBlock: BigInt!
   transactionHash: Bytes!
 }
 

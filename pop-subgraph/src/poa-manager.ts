@@ -23,6 +23,7 @@ import { PaymasterHub as PaymasterHubTemplate } from "../generated/templates";
 import { UniversalAccountRegistry as UniversalAccountRegistryTemplate } from "../generated/templates";
 import { PasskeyAccountFactory as PasskeyAccountFactoryTemplate } from "../generated/templates";
 import { ensureImplementationRegistry } from "./implementation-registry";
+import { backfillGlobalRulebook } from "./paymaster-hub";
 
 function getOrCreatePoaManager(
   address: Bytes,
@@ -234,6 +235,18 @@ export function handleInfrastructureDeployed(event: InfrastructureDeployedEvent)
     orgDeployConfig.transactionHash = event.transaction.hash;
     orgDeployConfig.save();
   }
+
+  // Read the global rulebook (v20). Like the reads above, it is seeded before this event exists
+  // — DeployInfrastructure/MainDeploy call setGlobalRulesBatch many transactions ahead of
+  // registerInfrastructure — so those GlobalRuleSet logs never reach the template. No-ops on a
+  // pre-v20 hub implementation (the getter reverts) and on chains where the rulebook is seeded
+  // by a later upgrade script, both of which are covered by the event handlers instead.
+  backfillGlobalRulebook(
+    Address.fromBytes(paymasterAddress),
+    event.block.timestamp,
+    event.block.number,
+    event.transaction.hash
+  );
 
   // Create UniversalAccountRegistry entity
   // Note: The Initialized event is emitted when the contract is deployed,

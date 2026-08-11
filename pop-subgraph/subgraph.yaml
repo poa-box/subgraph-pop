@@ -41,6 +41,7 @@ dataSources:
         - Beacon
         - BeaconUpgradeEvent
         - RegistryUpdate
+        - PaymasterGlobalRule
       abis:
         - name: PoaManager
           file: ./abis/PoaManager.json
@@ -291,6 +292,10 @@ templates:
         - OnboardingAccount
         - OrgDeployConfig
         - OrgDeploySponsorship
+        - PaymasterGlobalRule
+        - PaymasterTargetType
+        - PaymasterGlobalRuleBlock
+        - PaymasterRulesModeChange
       abis:
         - name: PaymasterHub
           file: ./abis/PaymasterHub.json
@@ -337,6 +342,16 @@ templates:
           handler: handleOrgDeployConfigUpdated
         - event: OrgDeploymentSponsored(indexed address,uint256)
           handler: handleOrgDeploymentSponsored
+        # v20 global rulebook (PaymasterRuleLib). Emitted via delegatecall, so the logs carry
+        # the PaymasterHub address and need no separate dataSource.
+        - event: GlobalRuleSet(indexed bytes32,indexed bytes4,bool,uint32)
+          handler: handleGlobalRuleSet
+        - event: TargetTypeSet(indexed bytes32,indexed address,indexed bytes32)
+          handler: handleTargetTypeSet
+        - event: RulesModeSet(indexed bytes32,uint8)
+          handler: handleRulesModeSet
+        - event: GlobalRuleBlockSet(indexed bytes32,indexed address,indexed bytes4,bool)
+          handler: handleGlobalRuleBlockSet
       file: ./src/paymaster-hub.ts
   - kind: ethereum
     name: UniversalAccountRegistry
