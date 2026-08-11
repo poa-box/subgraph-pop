@@ -2042,10 +2042,10 @@ adding a prefix.
 Written both by the dedicated setGlobalRuleBlock() and, from v20, automatically as a SEPARATE
 LOG paired with RuleSet: setRule(allowed=false) also sets the block (otherwise a Mirror org's
 revocation would silently fall through to the rulebook and un-revoke itself); setRule
-(allowed=true) and clearRule clear a standing block. The paired GlobalRuleBlockSet always has
-a higher logIndex than its RuleSet, but the two handlers write different entities so dispatch
-order is irrelevant. This row can exist with NO PaymasterRule row — the v20 migration
-reconstructs pre-v20 denials by emitting blocks alone.
+(allowed=true), clearRule, and adminBatchAddRules all clear a standing block. The paired
+GlobalRuleBlockSet always has a higher logIndex than its RuleSet, but the two handlers write
+different entities so dispatch order is irrelevant. This row can exist with NO PaymasterRule
+row — the v20 migration reconstructs pre-v20 denials by emitting blocks alone.
 
 KNOWN CONTRACT QUIRK: snapshotGlobalRules() and adoptGlobalRules() both write local allows but
 do NOT clear standing blocks, so blocked=true can legitimately coexist with

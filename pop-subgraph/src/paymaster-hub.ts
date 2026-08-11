@@ -296,8 +296,17 @@ export function handleOrgRegistered(event: OrgRegisteredEvent): void {
  *    ZERO PaymasterRule rows and its sponsorship is entirely rulebook-resolved. Do not read
  *    PaymasterOrgConfig.rules as "what is sponsored"; see PaymasterGlobalRule in schema.graphql
  *    for the full resolution algorithm.
- *  - NOT INDEXABLE: adminBatchAddRules writes {allowed:true, hint:0} with no event at all, so
- *    PaymasterRule under-reports allows for any pair written that way.
+ *  - adminBatchAddRules is also an emitter as of the v20 PR's follow-up fix: it used to write
+ *    {allowed:true, hint:0} inline with NO event, which made those rules structurally
+ *    unindexable. It now routes through PaymasterRuleLib.writeLocalRule, so it emits RuleSet
+ *    like any other allow — including the paired GlobalRuleBlockSet(false) that a fresh allow
+ *    fires to clear a standing block. It still skips unregistered orgs silently, which emits
+ *    nothing and correctly indexes as nothing. A cross-org batch therefore fans out one RuleSet
+ *    (and one PaymasterConfigChange) per written pair.
+ *    The 6 pre-fix pairs on the live chains — (Poa, QuickJoin) on arbitrum and (KUBI, QuickJoin)
+ *    on gnosis, selectors 0x130906e5 / 0xece090ff / 0xd58fb6ee — were each re-written by a later
+ *    evented call (arbitrum 450520281, gnosis 45439341), verified by log query, so no historical
+ *    gap remains for this subgraph to compensate for.
  */
 export function handleRuleSet(event: RuleSetEvent): void {
   let contractAddress = event.address;

@@ -440,6 +440,8 @@ describe("PaymasterHub global rulebook", () => {
       assert.fieldEquals("PaymasterRule", id, "maxCallGasHint", "0");
     });
 
+    // Also the exact log shape adminBatchAddRules now produces: allow with hint 0, plus the
+    // paired block-clear. Before the v20 follow-up fix that path wrote storage with no event.
     test("setRule(true) clears the standing block", () => {
       handleRuleSet(createRuleSetEvent(HUB, ORG_ID, TARGET, SELECTOR, false, 0));
       handleGlobalRuleBlockSet(
@@ -454,6 +456,46 @@ describe("PaymasterHub global rulebook", () => {
       let id = pairId(ORG_ID, TARGET, SELECTOR);
       assert.fieldEquals("PaymasterRule", id, "allowed", "true");
       assert.fieldEquals("PaymasterGlobalRuleBlock", id, "blocked", "false");
+    });
+
+    test("a cross-org adminBatchAddRules fan-out keys rows and audit rows per org", () => {
+      // adminBatchAddRules walks parallel (orgIds, targets, selectors) arrays and now emits one
+      // RuleSet per written pair, in one transaction at increasing logIndex. Unregistered orgs
+      // are skipped silently and emit nothing at all.
+      setupOrg(OTHER_ORG_ID);
+
+      let a = createRuleSetEvent(HUB, ORG_ID, TARGET, SELECTOR, true, 0);
+      a.logIndex = BigInt.fromI32(1);
+      handleRuleSet(a);
+
+      let b = createRuleSetEvent(HUB, OTHER_ORG_ID, TARGET, SELECTOR, true, 0);
+      b.logIndex = BigInt.fromI32(2);
+      handleRuleSet(b);
+
+      // Same (target, selector) under two orgs must not collide.
+      assert.entityCount("PaymasterRule", 2);
+      assert.fieldEquals("PaymasterRule", pairId(ORG_ID, TARGET, SELECTOR), "allowed", "true");
+      assert.fieldEquals(
+        "PaymasterRule",
+        pairId(OTHER_ORG_ID, TARGET, SELECTOR),
+        "allowed",
+        "true"
+      );
+
+      // One audit row per emitted log, each attributed to its own org.
+      assert.entityCount("PaymasterConfigChange", 2);
+      assert.fieldEquals(
+        "PaymasterConfigChange",
+        a.transaction.hash.concatI32(1).toHexString(),
+        "orgConfig",
+        orgConfigId(ORG_ID)
+      );
+      assert.fieldEquals(
+        "PaymasterConfigChange",
+        b.transaction.hash.concatI32(2).toHexString(),
+        "orgConfig",
+        orgConfigId(OTHER_ORG_ID)
+      );
     });
 
     test("the RuleSet/GlobalRuleBlockSet pair is order-independent", () => {
