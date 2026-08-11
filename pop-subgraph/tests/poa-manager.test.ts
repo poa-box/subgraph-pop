@@ -4,25 +4,61 @@ import {
   test,
   clearStore,
   afterEach,
-  beforeEach
+  beforeEach,
+  createMockedFunction
 } from "matchstick-as/assembly/index";
 import { dataSourceMock } from "matchstick-as/assembly/index";
-import { Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
+import { Address, Bytes, BigInt, ethereum } from "@graphprotocol/graph-ts";
 import {
   handleBeaconCreated,
   handleBeaconUpgraded,
-  handleRegistryUpdated
+  handleRegistryUpdated,
+  handleInfrastructureDeployed
 } from "../src/poa-manager";
 import {
   createBeaconCreatedEvent,
   createBeaconUpgradedEvent,
-  createRegistryUpdatedEvent
+  createRegistryUpdatedEvent,
+  createInfrastructureDeployedEvent
 } from "./poa-manager-utils";
 import { PoaManagerContract, Beacon, BeaconUpgradeEvent } from "../generated/schema";
 
 // Default mock event address used by matchstick-as
 const DEFAULT_ADDRESS = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a";
 const NETWORK = "sepolia";
+const HUB = Address.fromString("0x00000000000000000000000000000000000000fe");
+const OTHER = Address.fromString("0x00000000000000000000000000000000000000ff");
+const ACCOUNT_REGISTRY = Address.fromString("0x55f72ceb09cbc1faaed734b6505b99b0a1dfa1ca");
+
+// Mocks the getters handleInfrastructureDeployed reads at the InfrastructureDeployed block.
+// Module scope, not inside describe() — AssemblyScript has no closures.
+function mockHubGetters(): void {
+  createMockedFunction(HUB, "ENTRY_POINT", "ENTRY_POINT():(address)").returns([
+    ethereum.Value.fromAddress(Address.fromString("0x0000000071727de22e5e9d8baf0edac6f37da032"))
+  ]);
+  createMockedFunction(HUB, "HATS", "HATS():(address)").returns([
+    ethereum.Value.fromAddress(Address.fromString("0x3bc1a0ad72417f2d411118085256fc53cbddd137"))
+  ]);
+  createMockedFunction(HUB, "POA_MANAGER", "POA_MANAGER():(address)").returns([
+    ethereum.Value.fromAddress(Address.fromString("0x00000000000000000000000000000000000000a1"))
+  ]);
+  createMockedFunction(
+    HUB,
+    "getSolidarityFund",
+    "getSolidarityFund():((uint128,uint32,uint16,bool))"
+  ).reverts();
+  createMockedFunction(
+    HUB,
+    "getGracePeriodConfig",
+    "getGracePeriodConfig():((uint32,uint128,uint128))"
+  ).reverts();
+  createMockedFunction(
+    HUB,
+    "getOrgDeployConfig",
+    "getOrgDeployConfig():((uint128,uint128,uint128,uint32,uint8,bool,address))"
+  ).reverts();
+  createMockedFunction(HUB, "getGlobalRuleCount", "getGlobalRuleCount():(uint256)").reverts();
+}
 
 describe("PoaManager", () => {
   beforeEach(() => {
@@ -257,6 +293,93 @@ describe("PoaManager", () => {
         "registry",
         newRegistry2.toHexString()
       );
+    });
+  });
+
+  describe("handleInfrastructureDeployed — pre-registration catch-up reads", () => {
+    // Every getter below is read at the InfrastructureDeployed block to recover state the
+    // deploy script set BEFORE the PaymasterHub template existed. Only the onboarding pair is
+    // asserted here; the rest are mocked so the handler runs to completion.
+
+    test("v20 hub: reads the 7-field onboarding tuple including the per-account cap", () => {
+      mockHubGetters();
+      let cfg = new ethereum.Tuple();
+      cfg.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromString("10000000000000000")));
+      cfg.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(1000)));
+      cfg.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(1))); // attemptsToday
+      cfg.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(20607))); // currentDay
+      cfg.push(ethereum.Value.fromBoolean(true));
+      cfg.push(ethereum.Value.fromAddress(ACCOUNT_REGISTRY));
+      cfg.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(3)));
+      createMockedFunction(
+        HUB,
+        "getOnboardingConfig",
+        "getOnboardingConfig():((uint128,uint128,uint128,uint32,bool,address,uint8))"
+      ).returns([ethereum.Value.fromTuple(cfg)]);
+
+      handleInfrastructureDeployed(
+        createInfrastructureDeployedEvent(OTHER, OTHER, OTHER, HUB, OTHER, OTHER)
+      );
+
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "maxOnboardingsPerAccount", "3");
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "dailyCreationLimit", "1000");
+    });
+
+    test("pre-#175 hub: falls back to the 6-field shim and records 0 (== unlimited)", () => {
+      // The real case on arbitrum-one (447060027) and gnosis (45408029): the v20 arity cannot
+      // decode a 6-field return, so graph-node reports it as reverted and the shim takes over.
+      mockHubGetters();
+      createMockedFunction(
+        HUB,
+        "getOnboardingConfig",
+        "getOnboardingConfig():((uint128,uint128,uint128,uint32,bool,address,uint8))"
+      ).reverts();
+
+      let legacy = new ethereum.Tuple();
+      legacy.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromString("10000000000000000")));
+      legacy.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(1000)));
+      legacy.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)));
+      legacy.push(ethereum.Value.fromUnsignedBigInt(BigInt.fromI32(0)));
+      legacy.push(ethereum.Value.fromBoolean(true));
+      legacy.push(ethereum.Value.fromAddress(ACCOUNT_REGISTRY));
+      createMockedFunction(
+        HUB,
+        "getOnboardingConfig",
+        "getOnboardingConfig():((uint128,uint128,uint128,uint32,bool,address))"
+      ).returns([ethereum.Value.fromTuple(legacy)]);
+
+      handleInfrastructureDeployed(
+        createInfrastructureDeployedEvent(OTHER, OTHER, OTHER, HUB, OTHER, OTHER)
+      );
+
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "maxOnboardingsPerAccount", "0");
+      assert.fieldEquals("OnboardingConfig", HUB.toHexString(), "dailyCreationLimit", "1000");
+      assert.fieldEquals(
+        "OnboardingConfig",
+        HUB.toHexString(),
+        "accountRegistry",
+        ACCOUNT_REGISTRY.toHexString()
+      );
+    });
+
+    test("both shapes unavailable leaves no OnboardingConfig rather than a zeroed one", () => {
+      mockHubGetters();
+      createMockedFunction(
+        HUB,
+        "getOnboardingConfig",
+        "getOnboardingConfig():((uint128,uint128,uint128,uint32,bool,address,uint8))"
+      ).reverts();
+      createMockedFunction(
+        HUB,
+        "getOnboardingConfig",
+        "getOnboardingConfig():((uint128,uint128,uint128,uint32,bool,address))"
+      ).reverts();
+
+      handleInfrastructureDeployed(
+        createInfrastructureDeployedEvent(OTHER, OTHER, OTHER, HUB, OTHER, OTHER)
+      );
+
+      assert.entityCount("OnboardingConfig", 0);
     });
   });
 

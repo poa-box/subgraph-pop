@@ -3,8 +3,48 @@ import { ethereum, Address, Bytes } from "@graphprotocol/graph-ts";
 import {
   BeaconCreated,
   BeaconUpgraded,
-  RegistryUpdated
+  RegistryUpdated,
+  InfrastructureDeployed
 } from "../generated/PoaManager/PoaManager";
+
+export function createInfrastructureDeployedEvent(
+  orgDeployer: Address,
+  orgRegistry: Address,
+  implRegistry: Address,
+  paymasterHub: Address,
+  globalAccountRegistry: Address,
+  passkeyAccountFactoryBeacon: Address
+): InfrastructureDeployed {
+  let event = changetype<InfrastructureDeployed>(newMockEvent());
+
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("orgDeployer", ethereum.Value.fromAddress(orgDeployer))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("orgRegistry", ethereum.Value.fromAddress(orgRegistry))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("implRegistry", ethereum.Value.fromAddress(implRegistry))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("paymasterHub", ethereum.Value.fromAddress(paymasterHub))
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "globalAccountRegistry",
+      ethereum.Value.fromAddress(globalAccountRegistry)
+    )
+  );
+  event.parameters.push(
+    new ethereum.EventParam(
+      "passkeyAccountFactoryBeacon",
+      ethereum.Value.fromAddress(passkeyAccountFactoryBeacon)
+    )
+  );
+
+  return event;
+}
 
 export function createBeaconCreatedEvent(
   typeId: Bytes,
