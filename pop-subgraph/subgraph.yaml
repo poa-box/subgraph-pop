@@ -534,6 +534,12 @@ templates:
         - event: ClassesReplaced(indexed uint256,indexed
             bytes32,(uint8,uint8,bool,uint256,address,uint256[])[],uint64)
           handler: handleClassesReplaced
+        - event: ClassHatSet(indexed uint8,indexed uint256,bool)
+          handler: handleClassHatSet
+        - event: ProposalConfigV2(indexed uint256,uint32,bool)
+          handler: handleProposalConfigV2
+        - event: ConfigAdminSet(indexed address)
+          handler: handleConfigAdminSet
       file: ./src/hybrid-voting.ts
   - kind: ethereum
     name: DirectDemocracyVoting
@@ -586,6 +592,10 @@ templates:
           handler: handleProposalCleaned
         - event: ProposalExecutionFailed(indexed uint256,indexed uint256,bytes)
           handler: handleProposalExecutionFailed
+        - event: ProposalConfigV2(indexed uint256,uint32,bool)
+          handler: handleProposalConfigV2
+        - event: ConfigAdminSet(indexed address)
+          handler: handleConfigAdminSet
       file: ./src/direct-democracy-voting.ts
   - kind: ethereum
     name: EligibilityModule
@@ -661,6 +671,14 @@ templates:
           handler: handleRoleApplicationSubmitted
         - event: RoleApplicationWithdrawn(indexed uint256,indexed address)
           handler: handleRoleApplicationWithdrawn
+        - event: WearerEligibilityCleared(indexed address,indexed uint256,indexed address)
+          handler: handleWearerEligibilityCleared
+        - event: RoleManagerSet(indexed address)
+          handler: handleRoleManagerSet
+        - event: GroupEligibilitySet(indexed uint256,uint256[])
+          handler: handleGroupEligibilitySet
+        - event: HatConfigUpdated(indexed uint256,uint32)
+          handler: handleHatConfigUpdated
       file: ./src/eligibility-module.ts
   - kind: ethereum
     name: ParticipationToken
@@ -846,6 +864,48 @@ templates:
         - event: UniversalFactoryUpdated(indexed address)
           handler: handleUniversalFactoryUpdated
       file: ./src/zk-email-invites.ts
+  - kind: ethereum
+    name: RoleManager
+    network: arbitrum-one
+    source:
+      abi: RoleManager
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - RoleManagerContract
+        - ManagedRoleRef
+        - RoleGroup
+        - RoleGroupMembership
+        - RoleOffer
+        - Role
+        - Organization
+      abis:
+        - name: RoleManager
+          file: ./abis/RoleManager.json
+      eventHandlers:
+        - event: RoleManagerInitialized(indexed address,indexed bytes32,address)
+          handler: handleRoleManagerInitialized
+        - event: ModulesWired(address,address,address,address,address,address,address,address)
+          handler: handleModulesWired
+        - event: RoleCreated(indexed uint256,indexed uint256,string,bytes32,bool)
+          handler: handleRoleCreated
+        - event: GroupCreated(indexed uint256,indexed uint256,string,bytes32)
+          handler: handleGroupCreated
+        - event: RoleGroupMembershipChanged(indexed uint256,indexed uint256,bool)
+          handler: handleRoleGroupMembershipChanged
+        - event: RoleWiringApplied(indexed uint256,indexed uint256,bool)
+          handler: handleRoleWiringApplied
+        - event: RoleOffered(indexed uint256,indexed address,indexed uint256)
+          handler: handleRoleOffered
+        - event: RoleGranted(indexed uint256,indexed address,bool)
+          handler: handleRoleGranted
+        - event: RoleRevoked(indexed uint256,indexed address,bool)
+          handler: handleRoleRevoked
+        - event: BudgetSkipped(indexed uint256)
+          handler: handleBudgetSkipped
+      file: ./src/role-manager.ts
   - kind: ethereum
     name: PaymentManager
     network: arbitrum-one

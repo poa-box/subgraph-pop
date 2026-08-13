@@ -12,8 +12,36 @@ import {
   VoteCast,
   Winner,
   ProposalExecuted,
-  ClassesReplaced
+  ClassesReplaced,
+  ClassHatSet,
+  ProposalConfigV2,
+  ConfigAdminSet
 } from "../generated/templates/HybridVoting/HybridVoting";
+
+export function createClassHatSetEvent(classIdx: i32, hatId: BigInt, added: boolean): ClassHatSet {
+  let event = changetype<ClassHatSet>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("classIdx", ethereum.Value.fromI32(classIdx)));
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
+  event.parameters.push(new ethereum.EventParam("added", ethereum.Value.fromBoolean(added)));
+  return event;
+}
+
+export function createProposalConfigV2Event(id: BigInt, quorumOverride: BigInt, equalWeight: boolean): ProposalConfigV2 {
+  let event = changetype<ProposalConfigV2>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id)));
+  event.parameters.push(new ethereum.EventParam("quorumOverride", ethereum.Value.fromUnsignedBigInt(quorumOverride)));
+  event.parameters.push(new ethereum.EventParam("equalWeight", ethereum.Value.fromBoolean(equalWeight)));
+  return event;
+}
+
+export function createConfigAdminSetEvent(admin: Address): ConfigAdminSet {
+  let event = changetype<ConfigAdminSet>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("admin", ethereum.Value.fromAddress(admin)));
+  return event;
+}
 
 /**
  * Creates a mock Initialized event

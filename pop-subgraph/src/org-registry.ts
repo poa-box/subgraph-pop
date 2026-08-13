@@ -15,12 +15,14 @@ import {
   SwitchableBeaconContract,
   EducationHubContract,
   ParticipationTokenContract,
-  ZkEmailInvites
+  ZkEmailInvites,
+  RoleManagerContract
 } from "../generated/schema";
 import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templates";
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
 import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
+import { RoleManager as RoleManagerTemplate } from "../generated/templates";
 import { getOrCreateRole } from "./utils";
 
 // 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
@@ -41,6 +43,14 @@ const EDUCATION_HUB_TYPE_ID: Bytes = Bytes.fromHexString(
 // is registered via OrgRegistry.ContractRegistered, so it flows through wirePostDeployModule.
 const ZKEMAIL_INVITES_ID: Bytes = Bytes.fromHexString(
   "0x77a52db12b54c70a33bdf184cac221a69b235b98cf754315952afcffd06ae4db"
+);
+
+// keccak256("RoleManager") — the OrgRegistry typeId for the per-org RoleManager orchestrator.
+// Mirrors ModuleTypes.ROLE_MANAGER_ID in the contracts repo. Like ZkEmailInvites, RoleManager is
+// an opt-in module registered via OrgRegistry.ContractRegistered, so it flows through
+// wirePostDeployModule (it is NOT one of the fixed modules carried by OrgDeployed).
+const ROLE_MANAGER_ID: Bytes = Bytes.fromHexString(
+  "0x3ee833f9a00a5c16c22d680afd944532db30fb8792c5ab006ecf38df07335cb6"
 );
 
 /**
@@ -319,6 +329,36 @@ function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: 
       org.save();
 
       ZkEmailInvitesTemplate.create(Address.fromBytes(proxy));
+    }
+    return;
+  }
+
+  if (typeId.equals(ROLE_MANAGER_ID)) {
+    // RoleManager is an opt-in module, never carried by OrgDeployed, so this ContractRegistered is
+    // the ONLY place it can be wired — regardless of whether OrgDeployed has run yet (no
+    // deployedAtBlock guard, mirroring ZkEmailInvites). The proxy is registered BEFORE its
+    // initialize() runs (ModulesFactory / the adoption governance batch), so creating the
+    // data-source template here captures the init-time RoleManagerInitialized / ModulesWired /
+    // RoleCreated(isExisting) events that role-manager.ts then indexes — no eth_calls. No duplicate
+    // data source risk because OrgDeployed never spawns a RoleManager template.
+    let existing = RoleManagerContract.load(proxy);
+    if (existing == null) {
+      let rm = new RoleManagerContract(proxy);
+      rm.organization = org.id;
+      // Config (module wiring) is left null here: initialize() emits RoleManagerInitialized +
+      // ModulesWired, captured by the template created below. Binding the proxy now would only add
+      // an eth_call that reverts (registration precedes initialization).
+      rm.roleCount = BigInt.fromI32(0);
+      rm.groupCount = BigInt.fromI32(0);
+      rm.createdAt = event.block.timestamp;
+      rm.lastUpdatedAt = event.block.timestamp;
+      rm.save();
+
+      org.roleManager = proxy;
+      org.lastUpdatedAt = event.block.timestamp;
+      org.save();
+
+      RoleManagerTemplate.create(Address.fromBytes(proxy));
     }
     return;
   }

@@ -9,8 +9,57 @@ import {
   VouchConfigSet,
   Vouched,
   VouchRevoked,
-  WearerVouchesCleared
+  WearerVouchesCleared,
+  HatClaimed,
+  WearerEligibilityCleared,
+  RoleManagerSet,
+  GroupEligibilitySet,
+  HatConfigUpdated
 } from "../generated/templates/EligibilityModule/EligibilityModule";
+
+export function createHatClaimedEvent(wearer: Address, hatId: BigInt): HatClaimed {
+  let event = changetype<HatClaimed>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer)));
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
+  return event;
+}
+
+export function createWearerEligibilityClearedEvent(
+  wearer: Address,
+  hatId: BigInt,
+  admin: Address
+): WearerEligibilityCleared {
+  let event = changetype<WearerEligibilityCleared>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer)));
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
+  event.parameters.push(new ethereum.EventParam("admin", ethereum.Value.fromAddress(admin)));
+  return event;
+}
+
+export function createRoleManagerSetEvent(roleManager: Address): RoleManagerSet {
+  let event = changetype<RoleManagerSet>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("roleManager", ethereum.Value.fromAddress(roleManager)));
+  return event;
+}
+
+export function createGroupEligibilitySetEvent(groupHatId: BigInt, memberHats: BigInt[]): GroupEligibilitySet {
+  let event = changetype<GroupEligibilitySet>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("groupHatId", ethereum.Value.fromUnsignedBigInt(groupHatId)));
+  event.parameters.push(new ethereum.EventParam("memberHats", ethereum.Value.fromUnsignedBigIntArray(memberHats)));
+  return event;
+}
+
+export function createHatConfigUpdatedEvent(hatId: BigInt, newMaxSupply: BigInt): HatConfigUpdated {
+  let event = changetype<HatConfigUpdated>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
+  event.parameters.push(new ethereum.EventParam("newMaxSupply", ethereum.Value.fromUnsignedBigInt(newMaxSupply)));
+  return event;
+}
 
 export function createHatMetadataUpdatedEvent(
   hatId: BigInt,

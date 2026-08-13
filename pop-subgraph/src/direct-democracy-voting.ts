@@ -14,7 +14,9 @@ import {
   VoteCast,
   Winner,
   ProposalCleaned,
-  ProposalExecutionFailed
+  ProposalExecutionFailed,
+  ProposalConfigV2,
+  ConfigAdminSet
 } from "../generated/templates/DirectDemocracyVoting/DirectDemocracyVoting";
 import {
   DirectDemocracyVotingContract,
@@ -563,4 +565,32 @@ export function handleProposalExecutionFailed(event: ProposalExecutionFailed): v
   proposal.executionFailed = true;
   proposal.executionError = event.params.reason;
   proposal.save();
+}
+
+/**
+ * Handler for ProposalConfigV2(id, quorumOverride, equalWeight) — emitted by createProposalV2 AFTER
+ * NewProposal/NewHatProposal, so the DDVProposal already exists. equalWeight is always false for DDV
+ * (HV-only), carried for schema symmetry. Legacy createProposal proposals leave these fields null.
+ */
+export function handleProposalConfigV2(event: ProposalConfigV2): void {
+  let proposalId = event.address.toHexString() + "-" + event.params.id.toString();
+  let proposal = DDVProposal.load(proposalId);
+  if (proposal == null) {
+    return;
+  }
+  proposal.quorumOverride = event.params.quorumOverride;
+  proposal.equalWeight = event.params.equalWeight;
+  proposal.save();
+}
+
+/**
+ * Handler for ConfigAdminSet(admin) — records the scoped RoleManager config admin.
+ */
+export function handleConfigAdminSet(event: ConfigAdminSet): void {
+  let contract = DirectDemocracyVotingContract.load(event.address);
+  if (!contract) {
+    return;
+  }
+  contract.configAdmin = event.params.admin;
+  contract.save();
 }

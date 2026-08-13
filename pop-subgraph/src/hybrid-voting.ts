@@ -13,7 +13,10 @@ import {
   Winner,
   ProposalExecuted,
   ProposalExecutionFailed,
-  ClassesReplaced
+  ClassesReplaced,
+  ClassHatSet,
+  ProposalConfigV2,
+  ConfigAdminSet
 } from "../generated/templates/HybridVoting/HybridVoting";
 import {
   HybridVotingContract,
@@ -643,5 +646,155 @@ export function handleClassesReplaced(event: ClassesReplaced): void {
   // classVersion cannot distinguish two setClasses that share a block.
   contract.classVersion = version;
   contract.classesChange = changeId;
+  contract.save();
+}
+
+/**
+ * Handler for ClassHatSet(classIdx, hatId, added) — an incremental class edit (addHatToClass /
+ * removeHatFromClass), which changes a SINGLE class's hatIds without a full setClasses.
+ *
+ * The existing VotingClass model is drift-safe: a Proposal snapshots the exact ClassesReplaced
+ * emission (VotingClassChange) it was created under, and consumers reconstruct the config by joining
+ * through Proposal.classesChange. Mutating the live rows in place would retroactively change the
+ * config already-created proposals point at. So we mirror handleClassesReplaced: sweep the live rows,
+ * write a NEW VotingClassChange, and re-emit a full snapshot with the one class's hatIds edited.
+ * Proposals created before this edit keep their old (immutable) pointer; new proposals pick up the
+ * new change. classVersion is set to the emitting block number, coherent with ClassesReplaced.
+ */
+export function handleClassHatSet(event: ClassHatSet): void {
+  let contract = HybridVotingContract.load(event.address);
+  if (!contract) {
+    return;
+  }
+
+  let contractAddress = event.address.toHexString();
+  let classIdx = event.params.classIdx;
+  let editedHatId = event.params.hatId;
+  let added = event.params.added;
+
+  // Capture the live (isActive) rows before sweeping. addHatToClass validates classIdx on-chain, so
+  // the snapshot should contain that index; if the subgraph missed the seeding ClassesReplaced there
+  // is nothing to edit — bail rather than invent class parameters.
+  let allRows = contract.votingClasses.load();
+  let liveCount = 0;
+  for (let i = 0; i < allRows.length; i++) {
+    if (allRows[i].isActive) liveCount++;
+  }
+  if (liveCount == 0) {
+    return;
+  }
+
+  // Snapshot the live rows into parallel arrays keyed by classIndex (0..liveCount-1).
+  let strategies = new Array<string>(liveCount);
+  let slicePcts = new Array<i32>(liveCount);
+  let quadratics = new Array<bool>(liveCount);
+  let minBalances = new Array<BigInt>(liveCount);
+  let assets = new Array<Bytes>(liveCount);
+  let hatIdsPerClass = new Array<Array<BigInt>>(liveCount);
+  for (let i = 0; i < allRows.length; i++) {
+    let row = allRows[i];
+    if (!row.isActive) continue;
+    let ci = row.classIndex;
+    if (ci < 0 || ci >= liveCount) continue;
+    strategies[ci] = row.strategy;
+    slicePcts[ci] = row.slicePct;
+    quadratics[ci] = row.quadratic;
+    minBalances[ci] = row.minBalance;
+    assets[ci] = row.asset;
+    hatIdsPerClass[ci] = row.hatIds;
+  }
+
+  // Apply the single-hat edit to the target class.
+  if (classIdx >= 0 && classIdx < liveCount) {
+    let current = hatIdsPerClass[classIdx];
+    let next = new Array<BigInt>(0);
+    if (added) {
+      let present = false;
+      for (let j = 0; j < current.length; j++) {
+        next.push(current[j]);
+        if (current[j].equals(editedHatId)) present = true;
+      }
+      if (!present) next.push(editedHatId);
+    } else {
+      for (let j = 0; j < current.length; j++) {
+        if (!current[j].equals(editedHatId)) next.push(current[j]);
+      }
+    }
+    hatIdsPerClass[classIdx] = next;
+  }
+
+  // Sweep the live rows (they are superseded by the new snapshot below).
+  for (let i = 0; i < allRows.length; i++) {
+    if (!allRows[i].isActive) continue;
+    allRows[i].isActive = false;
+    allRows[i].save();
+  }
+
+  // New change-log entry. No classesHash in the event, so use the zero hash as an opaque tag; the
+  // synthetic version is the emitting block number (coherent with ClassesReplaced semantics).
+  let version = event.block.number;
+  let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let change = new VotingClassChange(changeId);
+  change.hybridVoting = event.address;
+  change.version = version;
+  change.logIndex = event.logIndex;
+  change.classesHash = ZERO_HASH;
+  change.numClasses = liveCount;
+  change.changedAt = event.block.timestamp;
+  change.changedAtBlock = event.block.number;
+  change.transactionHash = event.transaction.hash;
+  change.save();
+
+  for (let ci = 0; ci < liveCount; ci++) {
+    let classId =
+      contractAddress + "-" + event.block.number.toString() + "-" + event.logIndex.toString() + "-" + ci.toString();
+    let votingClass = new VotingClass(classId);
+    votingClass.hybridVoting = event.address;
+    votingClass.change = changeId;
+    votingClass.version = version;
+    votingClass.classIndex = ci;
+    votingClass.strategy = strategies[ci];
+    votingClass.slicePct = slicePcts[ci];
+    votingClass.quadratic = quadratics[ci];
+    votingClass.minBalance = minBalances[ci];
+    votingClass.asset = assets[ci];
+    votingClass.hatIds = hatIdsPerClass[ci];
+    votingClass.isActive = true;
+    votingClass.createdAt = event.block.timestamp;
+    votingClass.createdAtBlock = event.block.number;
+    votingClass.transactionHash = event.transaction.hash;
+    votingClass.save();
+  }
+
+  contract.classVersion = version;
+  contract.classesChange = changeId;
+  contract.save();
+}
+
+/**
+ * Handler for ProposalConfigV2(id, quorumOverride, equalWeight) — emitted by createProposalV2 AFTER
+ * NewProposal/NewHatProposal, so the Proposal entity already exists. Additive: legacy createProposal
+ * proposals never emit this, leaving the fields null.
+ */
+export function handleProposalConfigV2(event: ProposalConfigV2): void {
+  let proposalId = event.address.toHexString() + "-" + event.params.id.toString();
+  let proposal = Proposal.load(proposalId);
+  if (proposal == null) {
+    return;
+  }
+  proposal.quorumOverride = event.params.quorumOverride;
+  proposal.equalWeight = event.params.equalWeight;
+  proposal.save();
+}
+
+/**
+ * Handler for ConfigAdminSet(admin) — records the scoped RoleManager config admin.
+ */
+export function handleConfigAdminSet(event: ConfigAdminSet): void {
+  let contract = HybridVotingContract.load(event.address);
+  if (!contract) {
+    return;
+  }
+  contract.configAdmin = event.params.admin;
   contract.save();
 }

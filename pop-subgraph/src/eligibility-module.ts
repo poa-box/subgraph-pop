@@ -22,7 +22,11 @@ import {
   VouchingRateLimitExceededEvent as VouchingRateLimitExceededEventEvent,
   NewUserVouchingRestrictedEvent as NewUserVouchingRestrictedEventEvent,
   RoleApplicationSubmitted as RoleApplicationSubmittedEvent,
-  RoleApplicationWithdrawn as RoleApplicationWithdrawnEvent
+  RoleApplicationWithdrawn as RoleApplicationWithdrawnEvent,
+  WearerEligibilityCleared as WearerEligibilityClearedEvent,
+  RoleManagerSet as RoleManagerSetEvent,
+  GroupEligibilitySet as GroupEligibilitySetEvent,
+  HatConfigUpdated as HatConfigUpdatedEvent
 } from "../generated/templates/EligibilityModule/EligibilityModule";
 import {
   EligibilityModuleContract,
@@ -40,7 +44,8 @@ import {
   HatAutoMintEvent,
   HatClaimEvent,
   HatMetadataUpdateEvent,
-  RoleApplication
+  RoleApplication,
+  RoleOffer
 } from "../generated/schema";
 import {
   getUsernameForAddress,
@@ -940,6 +945,22 @@ export function handleHatClaimed(event: HatClaimedEvent): void {
         recordUserHatChange(user, hatId, true, event);
       }
     }
+
+    // Resolve a RoleManager offer acceptance: grantRole to a non-member records a RoleOffer keyed
+    // orgId-hatId-user (see role-manager.ts handleRoleOffered); accepting it means claiming the
+    // identity hat, which lands here. Flip the offer to Accepted. Keyed so we need no roleId.
+    let offerId =
+      changetype<Bytes>(eligibilityModule.organization).toHexString() +
+      "-" +
+      hatId.toString() +
+      "-" +
+      event.params.wearer.toHexString();
+    let offer = RoleOffer.load(offerId);
+    if (offer !== null && offer.status != "Accepted") {
+      offer.status = "Accepted";
+      offer.acceptedAt = event.block.timestamp;
+      offer.save();
+    }
   }
 
   claim.save();
@@ -1183,4 +1204,140 @@ export function handleRoleApplicationWithdrawn(event: RoleApplicationWithdrawnEv
     application.withdrawnAt = event.block.timestamp;
     application.save();
   }
+}
+
+/**
+ * WearerEligibilityCleared(wearer, hatId, admin) — the explicit per-wearer rule was REMOVED (via
+ * clearWearerEligibility, e.g. RoleManager.revokeRole or an offer withdrawal). This is NOT a ban:
+ * clearing drops the specific rule so eligibility falls back to the default / vouch / email /
+ * derived paths. Distinct from WearerEligibilityUpdated, which sets an explicit (eligible,standing)
+ * pair. We therefore set hasSpecificRules=false and DO NOT force eligible/standing to false (that
+ * would mis-render a cleared wearer as banned). Token-state (RoleWearer.isActive) is driven by the
+ * Hats TransferSingle burn, not here.
+ */
+export function handleWearerEligibilityCleared(
+  event: WearerEligibilityClearedEvent
+): void {
+  let contractAddress = event.address;
+  let hatId = event.params.hatId;
+  let wearer = event.params.wearer;
+
+  let wearerEligibilityId = contractAddress.toHexString() + "-" + hatId.toString() + "-" + wearer.toHexString();
+  let wearerEligibility = WearerEligibility.load(wearerEligibilityId);
+
+  if (wearerEligibility == null) {
+    // clearWearerEligibility emits even when no explicit rule existed (e.g. revokeRole on a
+    // default-eligible hat). Record the cleared state without fabricating a ban.
+    wearerEligibility = new WearerEligibility(wearerEligibilityId);
+    wearerEligibility.eligibilityModule = contractAddress;
+    wearerEligibility.hat = contractAddress.toHexString() + "-" + hatId.toString();
+    wearerEligibility.wearer = wearer;
+    wearerEligibility.hatId = hatId;
+    // No explicit rule = permissive fallback; consumers should look at Hat.defaultEligible /
+    // vouch / derived config for the real answer. eligible/standing here mean "not explicitly
+    // restricted", never a ban.
+    wearerEligibility.eligible = true;
+    wearerEligibility.standing = true;
+  }
+
+  // The defining change: the specific rule is gone.
+  wearerEligibility.hasSpecificRules = false;
+  wearerEligibility.admin = event.params.admin;
+  wearerEligibility.adminUsername = getUsernameForAddress(event.params.admin);
+  wearerEligibility.wearerUsername = getUsernameForAddress(wearer);
+
+  let eligibilityModule = EligibilityModuleContract.load(contractAddress);
+  if (eligibilityModule) {
+    let wearerUser = loadExistingUser(
+      eligibilityModule.organization,
+      wearer,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (wearerUser) {
+      wearerEligibility.wearerUser = wearerUser.id;
+    }
+    let adminUser = loadExistingUser(
+      eligibilityModule.organization,
+      event.params.admin,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (adminUser) {
+      wearerEligibility.adminUser = adminUser.id;
+    }
+  }
+
+  wearerEligibility.updatedAt = event.block.timestamp;
+  wearerEligibility.updatedAtBlock = event.block.number;
+  wearerEligibility.transactionHash = event.transaction.hash;
+  wearerEligibility.save();
+
+  if (eligibilityModule) {
+    linkWearerEligibilityToRoleWearer(
+      eligibilityModule.organization,
+      hatId,
+      wearer,
+      wearerEligibilityId
+    );
+  }
+}
+
+/**
+ * RoleManagerSet(roleManager) — the scoped secondary admin slot on the EligibilityModule. Recorded
+ * on the module entity (reuses the existing governanceAdmin field's sibling meaning is distinct:
+ * governanceAdmin was the pre-RoleManager admin; roleManager is the new scoped orchestrator).
+ */
+export function handleRoleManagerSet(event: RoleManagerSetEvent): void {
+  let contract = EligibilityModuleContract.load(event.address);
+  if (contract == null) {
+    return;
+  }
+  contract.roleManager = event.params.roleManager;
+  contract.save();
+}
+
+/**
+ * GroupEligibilitySet(groupHatId, memberHats) — derived (group) eligibility config on a MARKER hat:
+ * any wearer of a listed member identity hat is eligible+standing for groupHatId. Replaces the whole
+ * list (empty = cleared). Recorded on the Hat entity so consumers can render the group's derived
+ * membership without an eth_call. Marker hats already exist (createHatWithEligibility) by the time
+ * this fires.
+ */
+export function handleGroupEligibilitySet(event: GroupEligibilitySetEvent): void {
+  let contractAddress = event.address;
+  let hatId = event.params.groupHatId;
+  let hatEntityId = contractAddress.toHexString() + "-" + hatId.toString();
+
+  let hat = Hat.load(hatEntityId);
+  if (hat == null) {
+    // Derived config is only ever set on a hat created via createHatWithEligibility, so the Hat
+    // entity should exist. If not (unexpected ordering), skip rather than fabricate a partial hat.
+    return;
+  }
+
+  let memberHats = event.params.memberHats;
+  hat.groupMemberHats = memberHats;
+  hat.isDerivedGroup = memberHats.length > 0;
+  hat.groupEligibilityUpdatedAt = event.block.timestamp;
+  hat.save();
+}
+
+/**
+ * HatConfigUpdated(hatId, newMaxSupply) — maxSupply wrapper (EM.updateHatConfig). We do not track
+ * maxSupply on the Hat entity (mintedCount is the tracked counter); recorded as a metadata touch so
+ * the change is visible in the Hat's updated timestamp. No-op if the hat is not indexed.
+ */
+export function handleHatConfigUpdated(event: HatConfigUpdatedEvent): void {
+  let contractAddress = event.address;
+  let hatId = event.params.hatId;
+  let hatEntityId = contractAddress.toHexString() + "-" + hatId.toString();
+
+  let hat = Hat.load(hatEntityId);
+  if (hat == null) {
+    return;
+  }
+  hat.metadataUpdatedAt = event.block.timestamp;
+  hat.metadataUpdatedAtBlock = event.block.number;
+  hat.save();
 }

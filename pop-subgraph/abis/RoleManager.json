@@ -1,0 +1,1290 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "MODULE_ID",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes4",
+        "internalType": "bytes4"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "addRoleToGroup",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "createGroup",
+    "inputs": [
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "metadataCID",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "imageURI",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "memberRoleIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "sharedWiring",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.RoleWiring",
+        "components": [
+          {
+            "name": "setTaskPerm",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "taskPermMask",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "ddVoter",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ddCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvClassIndexes",
+            "type": "uint8[]",
+            "internalType": "uint8[]"
+          },
+          {
+            "name": "ptMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ptApprover",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "quickJoinAutoMint",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchingEnabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchQuorum",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "vouchMembershipHatId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "vouchCombine",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "budgetCapPerEpoch",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "budgetEpochLen",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "markerHatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "createRole",
+    "inputs": [
+      {
+        "name": "p",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.RoleParams",
+        "components": [
+          {
+            "name": "name",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "metadataCID",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "imageURI",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "maxSupply",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "mutableHat",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "groupIds",
+            "type": "uint256[]",
+            "internalType": "uint256[]"
+          },
+          {
+            "name": "wiring",
+            "type": "tuple",
+            "internalType": "struct IRoleManager.RoleWiring",
+            "components": [
+              {
+                "name": "setTaskPerm",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "taskPermMask",
+                "type": "uint8",
+                "internalType": "uint8"
+              },
+              {
+                "name": "ddVoter",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "ddCreator",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hvCreator",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "hvClassIndexes",
+                "type": "uint8[]",
+                "internalType": "uint8[]"
+              },
+              {
+                "name": "ptMember",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "ptApprover",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "eduCreator",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "eduMember",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "quickJoinAutoMint",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "vouchingEnabled",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "vouchQuorum",
+                "type": "uint32",
+                "internalType": "uint32"
+              },
+              {
+                "name": "vouchMembershipHatId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "vouchCombine",
+                "type": "bool",
+                "internalType": "bool"
+              },
+              {
+                "name": "budgetCapPerEpoch",
+                "type": "uint128",
+                "internalType": "uint128"
+              },
+              {
+                "name": "budgetEpochLen",
+                "type": "uint32",
+                "internalType": "uint32"
+              }
+            ]
+          },
+          {
+            "name": "initialGrants",
+            "type": "address[]",
+            "internalType": "address[]"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getGroup",
+    "inputs": [
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.GroupInfo",
+        "components": [
+          {
+            "name": "markerHatId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "memberRoleIds",
+            "type": "uint256[]",
+            "internalType": "uint256[]"
+          },
+          {
+            "name": "exists",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getRole",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.RoleInfo",
+        "components": [
+          {
+            "name": "hatId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "metadataCID",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "flags",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "exists",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "grantRole",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "groupCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "initialize",
+    "inputs": [
+      {
+        "name": "cfg",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.InitConfig",
+        "components": [
+          {
+            "name": "executor",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "eligibilityModule",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "hats",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "ddVoting",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "hybridVoting",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "taskManager",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "participationToken",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "educationHub",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "quickJoin",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "paymasterHub",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "orgId",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "existingOrgHats",
+            "type": "uint256[]",
+            "internalType": "uint256[]"
+          },
+          {
+            "name": "existingOrgHatNames",
+            "type": "string[]",
+            "internalType": "string[]"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "isInOrg",
+    "inputs": [
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "modules",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "ddVoting",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "hybridVoting",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "taskManager",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "participationToken",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "educationHub",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "quickJoin",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "paymasterHub",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "hats_",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "orgHats",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "registerExistingGroup",
+    "inputs": [
+      {
+        "name": "markerHatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "memberRoleIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "registerExistingRole",
+    "inputs": [
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "removeRoleFromGroup",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "revokeRole",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "roleCount",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "roleIdOfHat",
+    "inputs": [
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "setGroupWiring",
+    "inputs": [
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "w",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.RoleWiring",
+        "components": [
+          {
+            "name": "setTaskPerm",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "taskPermMask",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "ddVoter",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ddCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvClassIndexes",
+            "type": "uint8[]",
+            "internalType": "uint8[]"
+          },
+          {
+            "name": "ptMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ptApprover",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "quickJoinAutoMint",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchingEnabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchQuorum",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "vouchMembershipHatId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "vouchCombine",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "budgetCapPerEpoch",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "budgetEpochLen",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setRoleWiring",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "w",
+        "type": "tuple",
+        "internalType": "struct IRoleManager.RoleWiring",
+        "components": [
+          {
+            "name": "setTaskPerm",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "taskPermMask",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "ddVoter",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ddCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "hvClassIndexes",
+            "type": "uint8[]",
+            "internalType": "uint8[]"
+          },
+          {
+            "name": "ptMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "ptApprover",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduCreator",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "eduMember",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "quickJoinAutoMint",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchingEnabled",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "vouchQuorum",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "vouchMembershipHatId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "vouchCombine",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "budgetCapPerEpoch",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "budgetEpochLen",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "BudgetSkipped",
+    "inputs": [
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GroupCreated",
+    "inputs": [
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "markerHatId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "metadataCID",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "Initialized",
+    "inputs": [
+      {
+        "name": "version",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ModulesWired",
+    "inputs": [
+      {
+        "name": "ddVoting",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "hybridVoting",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "taskManager",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "participationToken",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "educationHub",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "quickJoin",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "paymasterHub",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "hats",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleCreated",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "metadataCID",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "isExisting",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleGranted",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "minted",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleGroupMembershipChanged",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "groupId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "added",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleManagerInitialized",
+    "inputs": [
+      {
+        "name": "executor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "orgId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "eligibilityModule",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleOffered",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleRevoked",
+    "inputs": [
+      {
+        "name": "roleId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "wasWearing",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "RoleWiringApplied",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "hatId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "isGroup",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyInGroup",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ArrayLengthMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotExecutor",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInGroup",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotInitializing",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RevokeIneffective",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnknownGroup",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnknownRole",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "WiringIncompatible",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroAddress",
+    "inputs": []
+  }
+]

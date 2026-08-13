@@ -13,6 +13,8 @@ type Organization @entity(immutable: false) {
   eligibilityModule: EligibilityModuleContract
   toggleModuleContract: ToggleModuleContract
   zkEmailInvites: ZkEmailInvites
+  # RoleManager orchestrator (optional, opt-in module — nullable until the module is registered).
+  roleManager: RoleManagerContract
   # Deployment data - nullable until OrgDeployed event
   topHatId: BigInt
   roleHatIds: [BigInt!]
@@ -33,6 +35,8 @@ type Organization @entity(immutable: false) {
   metadataAdminHatId: BigInt
   registeredContracts: [RegisteredContract!]! @derivedFrom(field: "organization")
   roles: [Role!]! @derivedFrom(field: "organization")
+  # RoleManager-managed groups (Executives, etc.). Empty when the org has no RoleManager.
+  roleGroups: [RoleGroup!]! @derivedFrom(field: "organization")
   # Project folders (TaskManager v4) — IPFS root for the org's folder tree.
   # bytes32 sha256 digest; frontend prepends 0x1220 and base58-encodes to a CIDv0.
   # Null until the first setFolders() call.
@@ -478,6 +482,9 @@ type HybridVotingContract @entity(immutable: false) {
   thresholdPct: Int! # Minimum support percentage (0-100)
   quorum: Int! # Minimum voter count
   hats: Bytes!
+  # Scoped config admin (RoleManager) allowed to call setCreatorHatAllowed / setClasses / class
+  # edits alongside the executor. Null until setConfigAdmin (ConfigAdminSet event).
+  configAdmin: Bytes
   createdAt: BigInt!
   createdAtBlock: BigInt!
   classVersion: BigInt! # Current class config version — see VotingClass.version; not unique per emission
@@ -595,6 +602,14 @@ type Proposal @entity(immutable: false) {
   endTimestamp: BigInt!
   isHatRestricted: Boolean! # true for NewHatProposal, false for NewProposal
   restrictedHatIds: [BigInt!] # only for hat-restricted proposals
+  # ---- createProposalV2 config (ProposalConfigV2 event; null for legacy createProposal) ----
+  # Per-proposal quorum override. For executable proposals effectiveQuorum = max(globalQuorum,
+  # quorumOverride); for signal-only polls it REPLACES the global quorum. Null/absent = legacy
+  # proposal created via createProposal (no override).
+  quorumOverride: BigInt
+  # equalWeight (HV-only): the proposal was tallied with a single synthetic DIRECT class
+  # {slicePct:100} instead of the org classes. Always false for DDV.
+  equalWeight: Boolean
   status: ProposalStatus!
   votes: [Vote!]! @derivedFrom(field: "proposal")
   batchExecutions: [BatchExecution!]! @derivedFrom(field: "hybridProposal") # Link to executions
@@ -633,6 +648,9 @@ type DirectDemocracyVotingContract @entity(immutable: false) {
   thresholdPct: Int! # Minimum support percentage (0-100)
   quorum: Int! # Minimum voter count
   hats: Bytes!
+  # Scoped config admin (RoleManager) allowed to call the HAT_ALLOWED setConfig branch alongside the
+  # executor. Null until setConfigAdmin (ConfigAdminSet event).
+  configAdmin: Bytes
   createdAt: BigInt!
   createdAtBlock: BigInt!
   targetPermissions: [DirectDemocracyVotingTargetPermission!]! @derivedFrom(field: "directDemocracyVoting")
@@ -691,6 +709,12 @@ type DDVProposal @entity(immutable: false) {
   endTimestamp: BigInt!
   isHatRestricted: Boolean! # true for NewHatProposal, false for NewProposal
   restrictedHatIds: [BigInt!] # only for hat-restricted proposals
+  # ---- createProposalV2 config (ProposalConfigV2 event; null for legacy createProposal) ----
+  # Per-proposal quorum override. Executable proposals: max(globalQuorum, quorumOverride);
+  # signal-only polls: replaces the global quorum. Null = legacy createProposal.
+  quorumOverride: BigInt
+  # Always false for DDV (equalWeight is HV-only) — carried for schema symmetry with Proposal.
+  equalWeight: Boolean
   status: DDVProposalStatus!
   votes: [DDVVote!]! @derivedFrom(field: "proposal")
   batchExecutions: [BatchExecution!]! @derivedFrom(field: "ddvProposal") # Link to executions
@@ -724,6 +748,10 @@ type EligibilityModuleContract @entity(immutable: false) {
   organization: Organization! # Organization this EligibilityModuleContract belongs to
   superAdmin: Bytes!
   governanceAdmin: Bytes
+  # Scoped secondary admin (RoleManager) — the orchestrator allowed to call the RoleManager-gated
+  # EM functions (createHatWithEligibility, setGroupEligibility, grantWearerEligibility, ...). Null
+  # until EligibilityModule.setRoleManager. Distinct from governanceAdmin (the pre-RoleManager admin).
+  roleManager: Bytes
   hatsContract: Bytes!
   toggleModule: Bytes!
   eligibilityModuleAdminHat: BigInt
@@ -766,6 +794,14 @@ type Hat @entity(immutable: false) {
   # hat is toggled off, so consumers wanting "is this person wearing X?" must
   # AND wearer-balance with this flag.
   active: Boolean!
+  # ---- Derived (group) eligibility config (EligibilityModule.GroupEligibilitySet) ----
+  # When non-empty, this hat is a group MARKER hat: any wearer of a listed member identity hat is
+  # eligible+standing for this hat (the 4th eligibility path beside hierarchy / vouch / email).
+  # Null/empty means no derived config. `isDerivedGroup` is a convenience flag mirroring
+  # groupMemberHats.length > 0.
+  groupMemberHats: [BigInt!]
+  isDerivedGroup: Boolean
+  groupEligibilityUpdatedAt: BigInt
   createdAt: BigInt!
   createdAtBlock: BigInt!
   transactionHash: Bytes!
@@ -792,6 +828,24 @@ type Role @entity(immutable: false) {
   metadataCID: Bytes # IPFS CID for extended metadata
   canVote: Boolean # Whether this role can vote
   isUserRole: Boolean # True for user-defined roles (in roleHatIds), false for system hats (TopHat, AdminHat)
+
+  # ---- RoleManager (managed role) fields ----
+  # Set when the role is a first-class RoleManager role. `roleManagerRoleId` is the RoleManager's
+  # internal role id (NOT the hatId); `roleManager` points at the orchestrator contract.
+  roleManager: RoleManagerContract
+  roleManagerRoleId: BigInt
+  # True for a group's marker hat (Executives). Marker hats are minted via EM
+  # createHatWithEligibility just like identity roles, so the HatCreatedWithEligibility handler
+  # would otherwise flag them isUserRole=true and append them to Organization.roleHatIds. The
+  # same-tx GroupCreated event flips this flag on and un-does that append so markers never appear
+  # in role/election/vouching pickers.
+  isGroupMarker: Boolean
+  # The group whose marker hat is THIS role (only set on marker roles).
+  markerForGroup: RoleGroup @derivedFrom(field: "markerRole")
+  # Group memberships where this role's identity hat is a member.
+  groupMemberships: [RoleGroupMembership!]! @derivedFrom(field: "role")
+  # Outstanding / accepted role offers targeting this role's identity hat.
+  roleOffers: [RoleOffer!]! @derivedFrom(field: "role")
 
   # Timestamps
   createdAt: BigInt!
@@ -2812,5 +2866,112 @@ type CrossChainAdminCallReceived @entity(immutable: true) {
   originDomain: Int!
   receivedAt: BigInt!
   receivedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+# ========================================
+# RoleManager — first-class named roles + role groups
+# The per-org orchestrator that turns a governance vote into role/group creation, membership and
+# permission wiring. RoleManager stores naming + group composition ONLY; per-module permission
+# state still derives from the module events on the (identity / marker) hats (HatPermission,
+# GlobalRolePermission). See PLAN.md §1.2 / §1.3.
+# ========================================
+
+type RoleManagerContract @entity(immutable: false) {
+  id: Bytes! # proxy address
+  organization: Organization!
+  # Wired module addresses — seeded from RoleManagerInitialized / ModulesWired (emitted inside
+  # initialize(), captured because the data-source template is created at ContractRegistered,
+  # BEFORE initialize runs). Nullable for the instant between registration and same-tx initialize.
+  executor: Bytes
+  eligibilityModule: Bytes
+  hats: Bytes
+  ddVoting: Bytes
+  hybridVoting: Bytes
+  taskManager: Bytes
+  participationToken: Bytes
+  educationHub: Bytes
+  quickJoin: Bytes
+  paymasterHub: Bytes
+  # Monotonic counters mirrored from the events (RoleManager assigns ++roleCount / ++groupCount).
+  roleCount: BigInt!
+  groupCount: BigInt!
+  createdAt: BigInt
+  lastUpdatedAt: BigInt
+  roleGroups: [RoleGroup!]! @derivedFrom(field: "roleManager")
+  offers: [RoleOffer!]! @derivedFrom(field: "roleManager")
+}
+
+# Internal roleId -> hat/role index. RoleManager events carry the internal roleId (NOT the hatId);
+# this row lets the membership / wiring / offer handlers resolve a roleId back to its Role entity
+# without an eth_call. Populated by RoleCreated. Mirrors the HatLookup pattern.
+type ManagedRoleRef @entity(immutable: false) {
+  id: String! # roleManagerAddress-roleId
+  roleManager: RoleManagerContract!
+  organization: Organization!
+  roleId: BigInt!
+  hatId: BigInt!
+  role: Role!
+  isGroupMarker: Boolean!
+}
+
+type RoleGroup @entity(immutable: false) {
+  id: String! # orgId-groupId
+  roleManager: RoleManagerContract!
+  organization: Organization!
+  groupId: BigInt!
+  name: String
+  metadataCID: Bytes # bytes32 sha256 digest of the group metadata JSON (may be zero)
+  markerHatId: BigInt!
+  # The Role entity for the marker hat (isGroupMarker=true). Link, not derived, so a group with a
+  # not-yet-indexed marker Role is still queryable.
+  markerRole: Role
+  isExisting: Boolean! # true when adopted from a pre-existing marker hat (registerExistingGroup)
+  createdAt: BigInt!
+  createdAtBlock: BigInt!
+  lastUpdatedAt: BigInt!
+  transactionHash: Bytes!
+  memberships: [RoleGroupMembership!]! @derivedFrom(field: "group")
+}
+
+# Mutable membership row: a role's identity hat belongs to a group. `isActive` flips false on
+# removeRoleFromGroup rather than deleting the row, so history is queryable.
+type RoleGroupMembership @entity(immutable: false) {
+  id: String! # orgId-groupId-roleId
+  group: RoleGroup!
+  roleManager: RoleManagerContract!
+  organization: Organization!
+  roleManagerRoleId: BigInt!
+  # The member role's Role entity (via its identity hat). Nullable only if RoleCreated hasn't been
+  # indexed yet (should never happen — createRole registers the role before adding it to groups).
+  role: Role
+  isActive: Boolean!
+  addedAt: BigInt!
+  updatedAt: BigInt!
+  transactionHash: Bytes!
+}
+
+enum RoleOfferStatus {
+  Offered
+  Accepted
+}
+
+# A grantRole to a NON-member records an OFFER (explicit EM eligibility + RoleOffered event), which
+# the user later accepts via EligibilityModule.claimHats — surfaced here as HatClaimed on the
+# identity hat. Keyed orgId-hatId-user so the EM HatClaimed handler can resolve acceptance without
+# knowing the RoleManager roleId. See PLAN.md §1.4b.
+type RoleOffer @entity(immutable: false) {
+  id: String! # orgId-hatId-user
+  roleManager: RoleManagerContract!
+  organization: Organization!
+  roleManagerRoleId: BigInt!
+  role: Role # identity-hat Role
+  hatId: BigInt!
+  user: Bytes!
+  userUsername: String
+  status: RoleOfferStatus!
+  offeredAt: BigInt!
+  offeredAtBlock: BigInt!
+  acceptedAt: BigInt
   transactionHash: Bytes!
 }
