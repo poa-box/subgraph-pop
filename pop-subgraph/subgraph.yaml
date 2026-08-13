@@ -256,9 +256,17 @@ templates:
         - OrgMetaUpdate
         - RegisteredContract
         - SwitchableBeaconContract
+        - EducationHubContract
+        - HatPermission
+        - Role
       abis:
         - name: OrgRegistry
           file: ./abis/OrgRegistry.json
+        # A post-deploy EducationHub emits its CreatorHatSet/MemberHatSet before
+        # ContractRegistered spawns its data source, so those rows can only be
+        # recovered by reading the hub directly here. See wirePostDeployModule.
+        - name: EducationHub
+          file: ./abis/EducationHub.json
       eventHandlers:
         - event: OrgRegistered(indexed bytes32,indexed address,bytes,bytes32)
           handler: handleOrgRegistered

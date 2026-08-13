@@ -5,9 +5,10 @@ import {
   clearStore,
   afterEach,
   beforeEach,
-  dataSourceMock
+  dataSourceMock,
+  createMockedFunction
 } from "matchstick-as/assembly/index";
-import { Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
+import { Address, Bytes, BigInt, ethereum } from "@graphprotocol/graph-ts";
 import {
   handleOrgRegistered,
   handleMetaUpdated,
@@ -26,7 +27,8 @@ import {
   OrgRegistryContract,
   Organization,
   RegisteredContract,
-  OrgMetadata
+  OrgMetadata,
+  HatPermission
 } from "../generated/schema";
 
 // Default mock event address from matchstick
@@ -49,6 +51,25 @@ function createOrgWithoutEduHub(orgId: Bytes, deployed: boolean): void {
     org.deployedAtBlock = BigInt.fromI32(100);
   }
   org.save();
+}
+
+/**
+ * Mock EducationHub.creatorHatIds()/memberHatIds() — the on-chain enumerations
+ * wirePostDeployModule reads to recover the hat grants whose CreatorHatSet /
+ * MemberHatSet logs were emitted in an earlier block, before this proxy's data
+ * source existed.
+ */
+function mockHubHatIds(hub: Address, creatorHats: BigInt[], memberHats: BigInt[]): void {
+  createMockedFunction(
+    hub,
+    "creatorHatIds",
+    "creatorHatIds():(uint256[])"
+  ).returns([ethereum.Value.fromUnsignedBigIntArray(creatorHats)]);
+  createMockedFunction(
+    hub,
+    "memberHatIds",
+    "memberHatIds():(uint256[])"
+  ).returns([ethereum.Value.fromUnsignedBigIntArray(memberHats)]);
 }
 
 /**
@@ -478,6 +499,7 @@ describe("OrgRegistry", () => {
 
       // Org deployed without an EducationHub (the Decentral Park case).
       createOrgWithoutEduHub(orgId, true);
+      mockHubHatIds(proxy, [], []);
 
       let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
       ev.logIndex = BigInt.fromI32(2);
@@ -565,6 +587,128 @@ describe("OrgRegistry", () => {
       assert.entityCount("EducationHubContract", 0);
       // The generic RegisteredContract row is still written regardless.
       assert.entityCount("RegisteredContract", 1);
+    });
+
+    test("backfills Creator/Member hat permissions from the hub's on-chain enumerations", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      createOrgWithoutEduHub(orgId, true);
+
+      // Decentral Park's real shape: one creator hat, two member hats, where the
+      // creator is also a member — so it must yield a row under BOTH roles.
+      let executiveHat = BigInt.fromString(
+        "36180248838698575036480031466286475792781881727149517033480474826113024"
+      );
+      let memberHat = BigInt.fromString(
+        "36180248838698575132261002770404529440178570924043841009651669962588160"
+      );
+      mockHubHatIds(proxy, [executiveHat], [memberHat, executiveHat]);
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      // 1 Creator + 2 Member — the same 3-row shape every deploy-time hub already has.
+      assert.entityCount("HatPermission", 3);
+
+      let creatorId = proxy.toHexString() + "-" + executiveHat.toString() + "-Creator";
+      assert.fieldEquals("HatPermission", creatorId, "contractType", "EducationHub");
+      assert.fieldEquals("HatPermission", creatorId, "organization", orgId.toHexString());
+      assert.fieldEquals("HatPermission", creatorId, "allowed", "true");
+
+      assert.fieldEquals(
+        "HatPermission",
+        proxy.toHexString() + "-" + executiveHat.toString() + "-Member",
+        "allowed",
+        "true"
+      );
+      assert.fieldEquals(
+        "HatPermission",
+        proxy.toHexString() + "-" + memberHat.toString() + "-Member",
+        "allowed",
+        "true"
+      );
+    });
+
+    test("does not clobber a hat permission an event already wrote", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      createOrgWithoutEduHub(orgId, true);
+
+      let hatId = BigInt.fromI32(42);
+
+      // A revoke arrived first (allowed=false). The array read cannot see the
+      // revocation's precise state, so the authoritative event row must win.
+      let existing = new HatPermission(proxy.toHexString() + "-" + hatId.toString() + "-Creator");
+      existing.contractAddress = proxy;
+      existing.contractType = "EducationHub";
+      existing.organization = orgId;
+      existing.hatId = hatId;
+      existing.permissionRole = "Creator";
+      existing.allowed = false;
+      existing.setAt = BigInt.fromI32(500);
+      existing.setAtBlock = BigInt.fromI32(50);
+      existing.transactionHash = Bytes.fromHexString("0xdead");
+      existing.save();
+
+      mockHubHatIds(proxy, [hatId], []);
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      assert.fieldEquals(
+        "HatPermission",
+        proxy.toHexString() + "-" + hatId.toString() + "-Creator",
+        "allowed",
+        "false"
+      );
+      assert.entityCount("HatPermission", 1);
+    });
+
+    test("reverting hat getters are tolerated - hub still wired, no permissions", () => {
+      let orgId = Bytes.fromHexString(
+        "0x1111111111111111111111111111111111111111111111111111111111111111"
+      );
+      let contractId = Bytes.fromHexString(
+        "0x7777777777777777777777777777777777777777777777777777777777777777"
+      );
+      let eduTypeId = Bytes.fromHexString(EDUCATION_HUB_TYPE_ID);
+      let proxy = Address.fromString("0x00000000000000000000000000000000000000ee");
+      let beacon = Address.fromString("0x00000000000000000000000000000000000000bb");
+      let owner = Address.fromString("0x0000000000000000000000000000000000000001");
+
+      createOrgWithoutEduHub(orgId, true);
+
+      createMockedFunction(proxy, "creatorHatIds", "creatorHatIds():(uint256[])").reverts();
+      createMockedFunction(proxy, "memberHatIds", "memberHatIds():(uint256[])").reverts();
+
+      let ev = createContractRegisteredEvent(contractId, orgId, eduTypeId, proxy, beacon, true, owner);
+      ev.logIndex = BigInt.fromI32(2);
+      handleContractRegistered(ev);
+
+      // The wiring that does not depend on the reads still happens.
+      assert.fieldEquals("Organization", orgId.toHexString(), "educationHub", proxy.toHexString());
+      assert.entityCount("EducationHubContract", 1);
+      assert.entityCount("HatPermission", 0);
     });
   });
 
