@@ -1,5 +1,6 @@
 import { Bytes, dataSource, json, BigInt, JSONValueKind, log } from "@graphprotocol/graph-ts";
 import { TokenRequestMetadata } from "../generated/schema";
+import { jsonToBigInt } from "./json-utils";
 
 /**
  * Handler for IPFS file data source that parses token request metadata JSON.
@@ -12,17 +13,18 @@ import { TokenRequestMetadata } from "../generated/schema";
  */
 export function handleTokenRequestMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
-  let context = dataSource.context();
-  let timestamp = context.getBigInt("timestamp");
 
-  // Immutable - skip if already exists
+  // No context is read here. This entity writes no owner pointer, so the spawning site passes
+  // no context at all — that is what lets graph-node's (template, CID, context) dedup collapse
+  // repeat references to one data source instead of double-INSERTing this immutable id.
+  // File data sources have no block context, so indexedAt is fixed at 0 (as in org-metadata.ts).
   let existing = TokenRequestMetadata.load(ipfsCid);
   if (existing != null) {
     return;
   }
 
   let metadata = new TokenRequestMetadata(ipfsCid);
-  metadata.indexedAt = timestamp;
+  metadata.indexedAt = BigInt.fromI32(0);
 
   // Try to parse the JSON content
   let jsonResult = json.try_fromBytes(content);
@@ -47,14 +49,9 @@ export function handleTokenRequestMetadata(content: Bytes): void {
   }
 
   // Parse submittedAt
-  let submittedAtValue = jsonObject.get("submittedAt");
-  if (submittedAtValue != null && !submittedAtValue.isNull() && submittedAtValue.kind == JSONValueKind.NUMBER) {
-    let raw = submittedAtValue.toF64().toString();
-    let dotIndex = raw.indexOf(".");
-    if (dotIndex >= 0) {
-      raw = raw.substring(0, dotIndex);
-    }
-    metadata.submittedAt = BigInt.fromString(raw);
+  let submittedAt = jsonToBigInt(jsonObject.get("submittedAt"));
+  if (submittedAt !== null) {
+    metadata.submittedAt = submittedAt;
   }
 
   metadata.save();

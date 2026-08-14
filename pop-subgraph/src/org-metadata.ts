@@ -1,5 +1,6 @@
 import { Bytes, dataSource, json, BigInt, BigDecimal, JSONValueKind } from "@graphprotocol/graph-ts";
 import { OrgMetadata, OrgMetadataLink } from "../generated/schema";
+import { jsonToBigDecimal } from "./json-utils";
 
 /**
  * Handler for IPFS file data source that parses org metadata JSON.
@@ -30,13 +31,17 @@ export function handleOrgMetadata(content: Bytes): void {
   let context = dataSource.context();
   let orgId = context.getBytes("orgId");
 
+  // Org-scoped id, matching orgMetadataId() in org-registry.ts and the context key above. Not the
+  // bare CID: this row carries an `organization` pointer and owns immutable link children.
+  let entityId = orgId.toHexString() + "-" + ipfsHash;
+
   // Try to parse the JSON content
   let jsonResult = json.try_fromBytes(content);
   if (jsonResult.isError) {
     // JSON parsing failed - load or create entity with just the ID and org link
-    let metadata = OrgMetadata.load(ipfsHash);
+    let metadata = OrgMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new OrgMetadata(ipfsHash);
+      metadata = new OrgMetadata(entityId);
       metadata.organization = orgId;
       metadata.save();
     }
@@ -48,13 +53,13 @@ export function handleOrgMetadata(content: Bytes): void {
     let jsonObject = jsonValue.toObject();
 
     // Check if metadata already exists - if so, skip to avoid re-creating immutable OrgMetadataLink entities
-    let existingMetadata = OrgMetadata.load(ipfsHash);
+    let existingMetadata = OrgMetadata.load(entityId);
     if (existingMetadata != null) {
       return;
     }
 
     // Create new metadata entity
-    let metadata = new OrgMetadata(ipfsHash);
+    let metadata = new OrgMetadata(entityId);
 
     // Link to organization
     metadata.organization = orgId;
@@ -114,12 +119,9 @@ export function handleOrgMetadata(content: Bytes): void {
     // Parse taskPayoutHourlyRate — tokens-per-hour used for hours-only payouts
     // (supports fractional values like 12.5, mirroring task estHours). Optional;
     // the frontend defaults to 10 when missing.
-    let taskPayoutHourlyRateValue = jsonObject.get("taskPayoutHourlyRate");
-    if (
-      taskPayoutHourlyRateValue != null && !taskPayoutHourlyRateValue.isNull() &&
-      taskPayoutHourlyRateValue.kind == JSONValueKind.NUMBER
-    ) {
-      metadata.taskPayoutHourlyRate = BigDecimal.fromString(taskPayoutHourlyRateValue.toF64().toString());
+    let taskPayoutHourlyRate = jsonToBigDecimal(jsonObject.get("taskPayoutHourlyRate"));
+    if (taskPayoutHourlyRate !== null) {
+      metadata.taskPayoutHourlyRate = taskPayoutHourlyRate;
     }
 
     // Set indexed timestamp (approximate - file data sources don't have block context)
@@ -146,9 +148,9 @@ export function handleOrgMetadata(content: Bytes): void {
             nameValue != null && !nameValue.isNull() && nameValue.kind == JSONValueKind.STRING &&
             urlValue != null && !urlValue.isNull() && urlValue.kind == JSONValueKind.STRING
           ) {
-            let linkId = ipfsHash + "-" + i.toString();
+            let linkId = entityId + "-" + i.toString();
             let link = new OrgMetadataLink(linkId);
-            link.metadata = ipfsHash;
+            link.metadata = entityId;
             link.name = nameValue.toString();
             link.url = urlValue.toString();
             link.index = i;
@@ -159,9 +161,9 @@ export function handleOrgMetadata(content: Bytes): void {
     }
   } else {
     // Not a JSON object - load or create entity with just the ID and org link
-    let metadata = OrgMetadata.load(ipfsHash);
+    let metadata = OrgMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new OrgMetadata(ipfsHash);
+      metadata = new OrgMetadata(entityId);
       metadata.organization = orgId;
       metadata.save();
     }

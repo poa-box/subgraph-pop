@@ -37,6 +37,68 @@ function mockOrgMetadataSource(seedHex: string): string {
   return cid;
 }
 
+let OTHER_ORG_ID = Bytes.fromHexString(
+  "0x2222222222222222222222222222222222222222222222222222222222222222"
+);
+
+describe("OrgMetadata IPFS Handler — id scoping", () => {
+  afterEach(() => {
+    clearStore();
+    dataSourceMock.resetValues();
+  });
+
+  // Regression for the file-data-source context rule. OrgMetadata carries an `organization`
+  // pointer and owns immutable OrgMetadataLink children, so its id is scoped by orgId. Two orgs
+  // whose metadata JSON hashes to the same CID get different contexts, so graph-node spawns two
+  // file data sources — with the old bare-CID id both would INSERT the same link rows and halt
+  // indexing ("impossible combination of entity operations").
+  test("Two orgs sharing one metadata CID produce two rows, not a collision", () => {
+    let cid = bytes32ToCid(
+      Bytes.fromHexString(
+        "0x9999999999999999999999999999999999999999999999999999999999999999"
+      )
+    );
+    let json =
+      '{"description":"Shared boilerplate","links":[{"name":"Site","url":"https://a.example"}]}';
+
+    let ctxA = new DataSourceContext();
+    ctxA.setBytes("orgId", ORG_ID);
+    dataSourceMock.setAddressAndContext(cid, ctxA);
+    handleOrgMetadata(Bytes.fromUTF8(json));
+
+    let ctxB = new DataSourceContext();
+    ctxB.setBytes("orgId", OTHER_ORG_ID);
+    dataSourceMock.setAddressAndContext(cid, ctxB);
+    handleOrgMetadata(Bytes.fromUTF8(json));
+
+    // Two distinct, org-scoped rows — and crucially two distinct immutable link rows.
+    assert.entityCount("OrgMetadata", 2);
+    assert.entityCount("OrgMetadataLink", 2);
+
+    let idA = ORG_ID.toHexString() + "-" + cid;
+    let idB = OTHER_ORG_ID.toHexString() + "-" + cid;
+    assert.fieldEquals("OrgMetadata", idA, "organization", ORG_ID.toHexString());
+    assert.fieldEquals("OrgMetadata", idB, "organization", OTHER_ORG_ID.toHexString());
+    assert.fieldEquals("OrgMetadataLink", idA + "-0", "metadata", idA);
+    assert.fieldEquals("OrgMetadataLink", idB + "-0", "metadata", idB);
+  });
+
+  // The same (org, CID) referenced twice must stay a single row: graph-node dedupes it upstream,
+  // and the in-handler guard is the same-region safety net.
+  test("Re-referencing the same (org, CID) does not duplicate", () => {
+    let cid = mockOrgMetadataSource(
+      "0x8888888888888888888888888888888888888888888888888888888888888888"
+    );
+    let json = '{"description":"Once","links":[{"name":"Site","url":"https://a.example"}]}';
+
+    handleOrgMetadata(Bytes.fromUTF8(json));
+    handleOrgMetadata(Bytes.fromUTF8(json));
+
+    assert.entityCount("OrgMetadata", 1);
+    assert.entityCount("OrgMetadataLink", 1);
+  });
+});
+
 describe("OrgMetadata IPFS Handler — task payout fields", () => {
   afterEach(() => {
     clearStore();
@@ -53,10 +115,10 @@ describe("OrgMetadata IPFS Handler — task payout fields", () => {
     handleOrgMetadata(Bytes.fromUTF8(jsonContent));
 
     assert.entityCount("OrgMetadata", 1);
-    assert.fieldEquals("OrgMetadata", cid, "organization", ORG_ID.toHexString());
-    assert.fieldEquals("OrgMetadata", cid, "description", "Decentral Park");
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHoursOnly", "true");
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHourlyRate", "10");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "organization", ORG_ID.toHexString());
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "description", "Decentral Park");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHoursOnly", "true");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHourlyRate", "10");
   });
 
   test("Stores taskPayoutHoursOnly=false and a fractional rate", () => {
@@ -69,8 +131,8 @@ describe("OrgMetadata IPFS Handler — task payout fields", () => {
     handleOrgMetadata(Bytes.fromUTF8(jsonContent));
 
     assert.entityCount("OrgMetadata", 1);
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHoursOnly", "false");
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHourlyRate", "12.5");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHoursOnly", "false");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHourlyRate", "12.5");
   });
 
   test("Leaves task payout fields null when missing", () => {
@@ -84,7 +146,7 @@ describe("OrgMetadata IPFS Handler — task payout fields", () => {
     // Entity is still created from the rest of the metadata; the payout fields
     // are simply left unset (no "taskPayoutHourlyRate" key written to the store).
     assert.entityCount("OrgMetadata", 1);
-    assert.fieldEquals("OrgMetadata", cid, "description", "No payout config here");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "description", "No payout config here");
   });
 
   test("Ignores wrong-typed taskPayoutHourlyRate (string instead of number)", () => {
@@ -99,7 +161,7 @@ describe("OrgMetadata IPFS Handler — task payout fields", () => {
     // Handler stays resilient: the bool still parses and the wrong-typed rate
     // is ignored rather than bricking the entity.
     assert.entityCount("OrgMetadata", 1);
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHoursOnly", "true");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHoursOnly", "true");
   });
 
   test("Does not regress existing metadata fields", () => {
@@ -111,9 +173,9 @@ describe("OrgMetadata IPFS Handler — task payout fields", () => {
       '{"description":"Org","hideTreasury":true,"useTokenSymbol":true,"taskPayoutHoursOnly":true,"taskPayoutHourlyRate":10}';
     handleOrgMetadata(Bytes.fromUTF8(jsonContent));
 
-    assert.fieldEquals("OrgMetadata", cid, "hideTreasury", "true");
-    assert.fieldEquals("OrgMetadata", cid, "useTokenSymbol", "true");
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHoursOnly", "true");
-    assert.fieldEquals("OrgMetadata", cid, "taskPayoutHourlyRate", "10");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "hideTreasury", "true");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "useTokenSymbol", "true");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHoursOnly", "true");
+    assert.fieldEquals("OrgMetadata", ORG_ID.toHexString() + "-" + cid, "taskPayoutHourlyRate", "10");
   });
 });

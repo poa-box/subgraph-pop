@@ -70,12 +70,16 @@ function bytes32ToCid(hash: Bytes): string {
 }
 
 /**
- * Helper function to create an IPFS file data source for org metadata.
- * Uses DataSourceContext to pass the orgId to the handler so it can
- * link the metadata back to the organization.
- *
- * The contract stores bytes32 which is the sha256 digest from the IPFS CID.
- * We convert it back to CIDv0 format for The Graph to fetch.
+ * OrgMetadata entity id, scoped by the owning org (the row carries an `organization` pointer and
+ * owns immutable OrgMetadataLink children). Must stay identical to the id built in org-metadata.ts.
+ */
+export function orgMetadataId(orgId: Bytes, ipfsCid: string): string {
+  return orgId.toHexString() + "-" + ipfsCid;
+}
+
+/**
+ * Create an IPFS file data source for org metadata, passing orgId in the context so the handler
+ * can link the parsed content back to the organization.
  */
 function createIpfsDataSource(metadataHash: Bytes, orgId: Bytes): void {
   // Skip if metadataHash is empty (all zeros)
@@ -86,9 +90,8 @@ function createIpfsDataSource(metadataHash: Bytes, orgId: Bytes): void {
   // Convert bytes32 sha256 digest to IPFS CIDv0 string
   let ipfsCid = bytes32ToCid(metadataHash);
 
-  // Skip if metadata already indexed (prevents duplicate IPFS data sources
-  // which would cause INSERT conflicts for immutable OrgMetadataLink children)
-  let existing = OrgMetadata.load(ipfsCid);
+  // Same-region safety net only; cross-block dedup is graph-node's (template, CID, context) key.
+  let existing = OrgMetadata.load(orgMetadataId(orgId, ipfsCid));
   if (existing != null) {
     return;
   }
@@ -148,12 +151,10 @@ export function handleOrgRegistered(event: OrgRegisteredEvent): void {
   org.name = orgName;
   org.metadataHash = metadataHash;
 
-  // Link to metadata entity (will be populated when IPFS content is indexed)
-  // Use CIDv0 format as the metadata ID (must match the ID used in org-metadata.ts)
-  // Skip for zero hash (no metadata)
+  // Link to metadata entity (will be populated when IPFS content is indexed).
+  // Org-scoped id — must match the id built in org-metadata.ts. Skip for zero hash (no metadata).
   if (!metadataHash.equals(Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000"))) {
-    let metadataId = bytes32ToCid(metadataHash);
-    org.metadata = metadataId;
+    org.metadata = orgMetadataId(orgId, bytes32ToCid(metadataHash));
   }
 
   org.lastUpdatedAt = event.block.timestamp;
@@ -182,12 +183,10 @@ export function handleMetaUpdated(event: MetaUpdatedEvent): void {
     org.name = newOrgName;
     org.metadataHash = newMetadataHash;
 
-    // Link to new metadata entity (will be populated when IPFS content is indexed)
-    // Use CIDv0 format as the metadata ID (must match the ID used in org-metadata.ts)
-    // Skip for zero hash (no metadata)
+    // Link to new metadata entity (will be populated when IPFS content is indexed).
+    // Org-scoped id — must match the id built in org-metadata.ts. Skip for zero hash.
     if (!newMetadataHash.equals(Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000"))) {
-      let metadataId = bytes32ToCid(newMetadataHash);
-      org.metadata = metadataId;
+      org.metadata = orgMetadataId(orgId, bytes32ToCid(newMetadataHash));
     } else {
       org.metadata = null;
     }

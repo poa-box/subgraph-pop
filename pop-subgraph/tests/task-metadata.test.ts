@@ -83,6 +83,53 @@ describe("TaskMetadata IPFS Handler — dueDate (v6 soft deadline)", () => {
     assert.assertTrue(meta.dueDate === null);
   });
 
+  // Regression: IPFS content is caller-supplied, and AssemblyScript's f64.toString() emits
+  // exponent notation for small/large magnitudes and "NaN"/"Infinity" for non-finite values.
+  // None of those contain a ".", so the old dot-stripping idiom passed them straight to
+  // BigInt.fromString, which ABORTS on the first non-digit — halting indexing for the whole
+  // subgraph. jsonToBigInt now rejects them and leaves the field null.
+  test("Exponent-notation dueDate is rejected, not aborted on", () => {
+    let id = mockTaskMetadataSource(
+      "0x5234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+
+    // 1e-7 renders as "1e-7": no ".", so the old code called BigInt.fromString("1e-7").
+    let jsonContent = '{"name":"Exponent","dueDate":0.0000001}';
+    handleTaskMetadata(Bytes.fromUTF8(jsonContent));
+
+    // Reaching this line at all is the regression: the old code aborted the mapping here.
+    assert.fieldEquals("TaskMetadata", id, "name", "Exponent");
+    let meta = TaskMetadata.load(id);
+    assert.assertTrue(meta !== null);
+    assert.assertTrue(meta!.dueDate === null);
+  });
+
+  test("Very large dueDate is rejected, not aborted on", () => {
+    let id = mockTaskMetadataSource(
+      "0x6234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+
+    // 1e21 renders as "1e+21".
+    let jsonContent = '{"name":"Huge","dueDate":1000000000000000000000}';
+    handleTaskMetadata(Bytes.fromUTF8(jsonContent));
+
+    assert.fieldEquals("TaskMetadata", id, "name", "Huge");
+    let hugeMeta = TaskMetadata.load(id);
+    assert.assertTrue(hugeMeta !== null);
+    assert.assertTrue(hugeMeta!.dueDate === null);
+  });
+
+  test("Negative dueDate still parses", () => {
+    let id = mockTaskMetadataSource(
+      "0x7234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+
+    let jsonContent = '{"name":"Negative","dueDate":-42.9}';
+    handleTaskMetadata(Bytes.fromUTF8(jsonContent));
+
+    assert.fieldEquals("TaskMetadata", id, "dueDate", "-42");
+  });
+
   test("Fractional dueDate is truncated", () => {
     let id = mockTaskMetadataSource(
       "0x4234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"

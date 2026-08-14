@@ -50,15 +50,24 @@ function bytes32ToCid(hash: Bytes): string {
 }
 
 /**
+ * ZkEmailAllowlist entity id, scoped by the owning module (the row carries a `module` pointer and
+ * owns immutable entry children). Allowlist JSON is standardised, so two modules sharing a CID is
+ * expected. Must stay identical to the id built in zk-email-allowlist.ts.
+ */
+export function zkEmailAllowlistId(moduleAddress: Bytes, ipfsCid: string): string {
+  return moduleAddress.toHexString() + "-" + ipfsCid;
+}
+
+/**
  * Spawn an IPFS file data source over the active allowlist CID. Carries the module proxy address in
- * a DataSourceContext so handleZkEmailAllowlist can link the parsed content back to the module.
- * Mirrors createIpfsDataSource in org-registry.ts (zero-hash skip + dedupe-by-CID).
+ * a DataSourceContext so handleZkEmailAllowlist can scope the parsed content to the module.
+ * Mirrors createIpfsDataSource in org-registry.ts (zero-hash skip + module-scoped ids).
  */
 function createAllowlistDataSource(allowlistHash: Bytes, moduleAddress: Bytes): string {
   let ipfsCid = bytes32ToCid(allowlistHash);
 
-  // Pass the module address so the file handler can set ZkEmailAllowlist.module + back-link
-  // ZkEmailInvites.activeAllowlist. The file handler dedupes on the CID for immutable children.
+  // Context carries the module and nothing per-block, so repeat references to the same
+  // (module, CID) collapse to one data source.
   let context = new DataSourceContext();
   context.setBytes("module", moduleAddress);
 
@@ -98,8 +107,10 @@ export function handleActiveAllowlistSet(event: ActiveAllowlistSetEvent): void {
   let cid = bytes32ToCid(allowlistCid);
   module.activeRoot = merkleRoot;
   module.activeAllowlistCid = cid;
-  // Link to the ZkEmailAllowlist entity (populated once the IPFS content is indexed).
-  module.activeAllowlist = cid;
+  // Link to the ZkEmailAllowlist entity (populated once the IPFS content is indexed). Set here,
+  // from the chain handler, because a file data source runs in its own causality region and
+  // cannot read — let alone write — this chain-written entity.
+  module.activeAllowlist = zkEmailAllowlistId(moduleAddress, cid);
   module.lastUpdatedAt = event.block.timestamp;
   module.save();
 

@@ -127,7 +127,7 @@ describe("ParticipationToken", () => {
     // executor and hats are written ONLY inside initialize() — ParticipationToken has no
     // ExecutorUpdated/HatsSet event and no setter — so the getters are the only way to reach
     // them. Before this, both non-null fields sat at the zero address on every live row.
-    test("hydrates executor and hats from the getters", () => {
+    test("hydrates name, symbol and hats from the getters", () => {
       setupParticipationTokenEntities();
 
       createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "name", "name():(string)").returns([
@@ -136,11 +136,6 @@ describe("ParticipationToken", () => {
       createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "symbol", "symbol():(string)").returns([
         ethereum.Value.fromString("PT")
       ]);
-      createMockedFunction(
-        PARTICIPATION_TOKEN_ADDRESS,
-        "executor",
-        "executor():(address)"
-      ).returns([ethereum.Value.fromAddress(EXECUTOR)]);
       createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "hats", "hats():(address)").returns([
         ethereum.Value.fromAddress(HATS)
       ]);
@@ -148,10 +143,33 @@ describe("ParticipationToken", () => {
       handleInitialized(createInitializedEvent(BigInt.fromI32(1), PARTICIPATION_TOKEN_ADDRESS));
 
       let id = PARTICIPATION_TOKEN_ADDRESS.toHexString();
-      assert.fieldEquals("ParticipationTokenContract", id, "executor", EXECUTOR.toHexString());
       assert.fieldEquals("ParticipationTokenContract", id, "hatsContract", HATS.toHexString());
       assert.fieldEquals("ParticipationTokenContract", id, "name", "Argus Token");
       assert.fieldEquals("ParticipationTokenContract", id, "symbol", "PT");
+    });
+
+    test("does NOT call executor() — OrgDeployed already seeded it", () => {
+      // executor is immutable on ParticipationToken (no event, no setter) and org-deployer.ts
+      // seeds it from OrgDeployed, so reading it here would be one eth_call per org for nothing.
+      // No executor() mock is registered: if the handler ever calls it again, matchstick aborts
+      // on the unmocked call and this test fails.
+      setupParticipationTokenEntities();
+
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "name", "name():(string)").returns([
+        ethereum.Value.fromString("Argus Token")
+      ]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "symbol", "symbol():(string)").returns([
+        ethereum.Value.fromString("PT")
+      ]);
+      createMockedFunction(PARTICIPATION_TOKEN_ADDRESS, "hats", "hats():(address)").returns([
+        ethereum.Value.fromAddress(HATS)
+      ]);
+
+      handleInitialized(createInitializedEvent(BigInt.fromI32(1), PARTICIPATION_TOKEN_ADDRESS));
+
+      // The seeded value survives untouched.
+      let id = PARTICIPATION_TOKEN_ADDRESS.toHexString();
+      assert.fieldEquals("ParticipationTokenContract", id, "hatsContract", HATS.toHexString());
     });
 
     test("a reverting getter leaves the seeded value rather than aborting", () => {

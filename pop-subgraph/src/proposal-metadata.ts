@@ -1,5 +1,6 @@
 import { Bytes, dataSource, json, BigInt, JSONValueKind, log } from "@graphprotocol/graph-ts";
 import { ProposalMetadata } from "../generated/schema";
+import { jsonToBigInt } from "./json-utils";
 
 /**
  * Handler for IPFS file data source that parses proposal metadata JSON.
@@ -92,14 +93,9 @@ export function handleProposalMetadata(content: Bytes): void {
   }
 
   // Parse createdAt timestamp
-  let createdAtValue = jsonObject.get("createdAt");
-  if (createdAtValue != null && !createdAtValue.isNull() && createdAtValue.kind == JSONValueKind.NUMBER) {
-    let raw = createdAtValue.toF64().toString();
-    let dotIndex = raw.indexOf(".");
-    if (dotIndex >= 0) {
-      raw = raw.substring(0, dotIndex);
-    }
-    metadata.createdAt = BigInt.fromString(raw);
+  let createdAt = jsonToBigInt(jsonObject.get("createdAt"));
+  if (createdAt !== null) {
+    metadata.createdAt = createdAt;
   }
 
   metadata.save();

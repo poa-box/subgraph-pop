@@ -6,11 +6,18 @@ on:
     paths:
       - 'pop-subgraph/**'
       - 'peer-cashoutrelay-base/**'
+      # The wasm-start guard and the workflow itself gate every deploy, so a change to
+      # either must run CI. Without these, a typo in check-wasm-start.mjs merges green
+      # and silently disables the guard.
+      - 'scripts/**'
+      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
       - 'pop-subgraph/**'
       - 'peer-cashoutrelay-base/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
 
 jobs:
   # A module-level global initialised by a host call makes graph-node's allocator hand out
@@ -40,9 +47,15 @@ jobs:
       - run: node ../scripts/check-wasm-start.mjs build
         working-directory: ${{ matrix.dir }}
 
+  # The three deploy jobs below call a reusable workflow in another org and hand it
+  # GRAPH_DEPLOY_KEY, so it is pinned to an immutable SHA rather than a branch ref. The pin
+  # is the head of BreadchainCoop/subgraphform@hudsonhrh/add-network-input as of 2026-03-12;
+  # that branch carries the `network:` input, which does not exist on its main. Re-pin
+  # deliberately when picking up upstream changes — a mutable ref here would let changed
+  # third-party workflow code run with our deploy key.
   subgraph-arbitrum-one:
     needs: wasm-start-guard
-    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
+    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@bea1f2bc96a6c24fd44714bd799004c63e317b09
     with:
       subgraph-name: poa-arb-v-1
       working-directory: pop-subgraph
@@ -52,18 +65,20 @@ jobs:
 
   subgraph-gnosis:
     needs: wasm-start-guard
-    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
+    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@bea1f2bc96a6c24fd44714bd799004c63e317b09
     with:
       subgraph-name: poa-gnosis-v-1
       working-directory: pop-subgraph
       network: gnosis
-      run-tests: false
+      # run-tests stays enabled: matchstick is network-agnostic, and there is no cross-job
+      # dependency between the deploy jobs, so disabling it here would let a test failure
+      # block only the Arbitrum deploy while broken mappings still shipped to Gnosis.
     secrets:
       GRAPH_DEPLOY_KEY: ${{ secrets.GRAPH_DEPLOY_KEY }}
 
   subgraph-base:
     needs: wasm-start-guard
-    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@hudsonhrh/add-network-input
+    uses: BreadchainCoop/subgraphform/.github/workflows/_subgraph-cicd.yml@bea1f2bc96a6c24fd44714bd799004c63e317b09
     with:
       subgraph-name: peer-cashoutrelay-base
       working-directory: peer-cashoutrelay-base

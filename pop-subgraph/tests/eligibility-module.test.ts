@@ -127,7 +127,7 @@ function setupEligibilityModuleEntities(): void {
   hybridVoting.organization = orgId;
   hybridVoting.executor = Address.zero();
   hybridVoting.thresholdPct = 0;
-  hybridVoting.quorum = 0;
+  hybridVoting.quorum = BigInt.fromI32(0);
   hybridVoting.hats = Address.zero();
   hybridVoting.classVersion = BigInt.fromI32(0);
   hybridVoting.createdAt = BigInt.fromI32(1000);
@@ -139,7 +139,7 @@ function setupEligibilityModuleEntities(): void {
   ddv.organization = orgId;
   ddv.executor = Address.zero();
   ddv.thresholdPct = 0;
-  ddv.quorum = 0;
+  ddv.quorum = BigInt.fromI32(0);
   ddv.hats = Address.zero();
   ddv.createdAt = BigInt.fromI32(1000);
   ddv.createdAtBlock = BigInt.fromI32(100);
@@ -293,7 +293,7 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
     assert.fieldEquals("Hat", hatEntityId, "name", "ADMIN");
     assert.fieldEquals("Hat", hatEntityId, "metadataCID", metadataCID.toHexString());
     // Verify metadata link is set to CIDv0 format for IPFS fetching
-    assert.fieldEquals("Hat", hatEntityId, "metadata", bytes32ToCid(metadataCID));
+    assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(metadataCID));
   });
 
   test("HatMetadataUpdated sets metadata link to CIDv0 format", () => {
@@ -310,7 +310,7 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
 
     let hatEntityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1001";
     // Verify metadata field is set to the CIDv0 format (base58 encoded)
-    assert.fieldEquals("Hat", hatEntityId, "metadata", bytes32ToCid(metadataCID));
+    assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(metadataCID));
   });
 
   test("HatMetadataUpdated does NOT set metadata link for zero hash", () => {
@@ -370,7 +370,7 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
 
     let hatEntityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1001";
     // Verify first metadata link
-    assert.fieldEquals("Hat", hatEntityId, "metadata", bytes32ToCid(firstCID));
+    assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(firstCID));
 
     // Second update with different log index
     let event2 = createHatMetadataUpdatedEvent(
@@ -386,7 +386,7 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
     // Verify hat has latest metadata
     assert.fieldEquals("Hat", hatEntityId, "name", "SUPER_ADMIN");
     // Verify metadata link is updated to new CID
-    assert.fieldEquals("Hat", hatEntityId, "metadata", bytes32ToCid(secondCID));
+    assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(secondCID));
   });
 
   test("HatMetadataUpdated for non-existent hat does not create event", () => {

@@ -21,7 +21,7 @@ import {
   PasskeyQuickJoin,
   PasskeyAccount
 } from "../generated/schema";
-import { createExecutorChange, getOrCreateRole, getOrCreateRoleWearer, createUserOnJoin, recordUserHatChange, shouldCreateRoleWearer } from "./utils";
+import { getUsernameForAddress, createExecutorChange, getOrCreateRole, getOrCreateRoleWearer, createUserOnJoin, recordUserHatChange, shouldCreateRoleWearer } from "./utils";
 
 export function handleInitialized(event: InitializedEvent): void {
   // Initialization is handled by OrgDeployer when the contract is created.
@@ -52,8 +52,7 @@ export function handleQuickJoined(event: QuickJoinedEvent): void {
   joinEvent.joinedAt = event.block.timestamp;
   joinEvent.joinedAtBlock = event.block.number;
   joinEvent.transactionHash = event.transaction.hash;
-
-  joinEvent.save();
+  joinEvent.userUsername = getUsernameForAddress(event.params.user);
 
   // Create RoleWearer entities for each hat (only for user-facing hats to non-system addresses)
   let contract = QuickJoinContract.load(contractAddress);
@@ -67,6 +66,9 @@ export function handleQuickJoined(event: QuickJoinedEvent): void {
     );
 
     if (user) {
+      // Link the join event to the User so User.quickJoinEvents resolves — it returned [] for
+      // every member because this field was never written.
+      joinEvent.userUser = user.id;
       let hatIds = event.params.hatIds;
       for (let i = 0; i < hatIds.length; i++) {
         // Only create RoleWearer for eligible combinations
@@ -77,6 +79,8 @@ export function handleQuickJoined(event: QuickJoinedEvent): void {
       }
     }
   }
+
+  joinEvent.save();
 }
 
 export function handleQuickJoinedByMaster(event: QuickJoinedByMasterEvent): void {
@@ -87,14 +91,14 @@ export function handleQuickJoinedByMaster(event: QuickJoinedByMasterEvent): void
   joinEvent.quickJoin = contractAddress;
   joinEvent.user = event.params.user;
   joinEvent.master = event.params.master;
+  joinEvent.masterUsername = getUsernameForAddress(event.params.master);
   joinEvent.hatIds = event.params.hatIds;
   joinEvent.isMasterDeployJoin = true;
   joinEvent.isRegisterAndJoin = false;
   joinEvent.joinedAt = event.block.timestamp;
   joinEvent.joinedAtBlock = event.block.number;
   joinEvent.transactionHash = event.transaction.hash;
-
-  joinEvent.save();
+  joinEvent.userUsername = getUsernameForAddress(event.params.user);
 
   // Create RoleWearer entities for each hat (only for user-facing hats to non-system addresses)
   let contract = QuickJoinContract.load(contractAddress);
@@ -108,6 +112,9 @@ export function handleQuickJoinedByMaster(event: QuickJoinedByMasterEvent): void
     );
 
     if (user) {
+      // Link the join event to the User so User.quickJoinEvents resolves — it returned [] for
+      // every member because this field was never written.
+      joinEvent.userUser = user.id;
       let hatIds = event.params.hatIds;
       for (let i = 0; i < hatIds.length; i++) {
         // Only create RoleWearer for eligible combinations
@@ -118,6 +125,8 @@ export function handleQuickJoinedByMaster(event: QuickJoinedByMasterEvent): void
       }
     }
   }
+
+  joinEvent.save();
 }
 
 export function handleExecutorUpdated(event: ExecutorUpdatedEvent): void {
@@ -183,6 +192,7 @@ export function handleMemberHatIdsUpdated(event: MemberHatIdsUpdatedEvent): void
   }
 
   let hatIds = event.params.hatIds;
+  let previousHatIds = contract.memberHatIds;
 
   // Persist the full member-hat list on the contract entity. This is the
   // source of truth for "which hats can be claimed via quickJoinWithUser
@@ -190,6 +200,36 @@ export function handleMemberHatIdsUpdated(event: MemberHatIdsUpdatedEvent): void
   // frontend currently makes from useOrgStructure.
   contract.memberHatIds = hatIds;
   contract.save();
+
+  // Revoke hats that dropped off the list. updateMemberHatIds() calls
+  // HatManager.clearHatArray() before re-adding, and clearHatArray wipes the slot in assembly
+  // WITHOUT emitting anything — unlike setHatInArray, which emits HatToggled. So a removed hat
+  // produces no HatToggled(hat,false) and no role event; this replacement array is the only
+  // signal it is gone, and without the diff the row stays allowed=true forever.
+  for (let i = 0; i < previousHatIds.length; i++) {
+    let oldHatId = previousHatIds[i];
+    let stillPresent = false;
+    for (let j = 0; j < hatIds.length; j++) {
+      if (hatIds[j].equals(oldHatId)) {
+        stillPresent = true;
+        break;
+      }
+    }
+    if (stillPresent) {
+      continue;
+    }
+
+    let staleId =
+      event.address.toHexString() + "-" + oldHatId.toString() + "-Member";
+    let stale = HatPermission.load(staleId);
+    if (stale != null) {
+      stale.allowed = false;
+      stale.setAt = event.block.timestamp;
+      stale.setAtBlock = event.block.number;
+      stale.transactionHash = event.transaction.hash;
+      stale.save();
+    }
+  }
 
   // Update all member hats based on the new list
   for (let i = 0; i < hatIds.length; i++) {
@@ -208,8 +248,10 @@ export function handleMemberHatIdsUpdated(event: MemberHatIdsUpdatedEvent): void
       permission.organization = contract.organization;
       permission.hatId = hatId;
       permission.permissionRole = "Member";
-      permission.allowed = true; // Assume allowed if in the list
     }
+    // Unconditional: presence in the list IS the grant, so a hat re-added after a removal must be
+    // reactivated rather than left at the stale allowed=false written above.
+    permission.allowed = true;
 
     // Link to Role entity
     let role = getOrCreateRole(contract.organization, hatId, event);
@@ -322,8 +364,7 @@ export function handleRegisterAndQuickJoined(event: RegisterAndQuickJoinedEvent)
   joinEvent.joinedAt = event.block.timestamp;
   joinEvent.joinedAtBlock = event.block.number;
   joinEvent.transactionHash = event.transaction.hash;
-
-  joinEvent.save();
+  joinEvent.userUsername = getUsernameForAddress(event.params.user);
 
   // Create RoleWearer entities for each hat
   let contract = QuickJoinContract.load(contractAddress);
@@ -337,6 +378,9 @@ export function handleRegisterAndQuickJoined(event: RegisterAndQuickJoinedEvent)
     );
 
     if (user) {
+      // Link the join event to the User so User.quickJoinEvents resolves — it returned [] for
+      // every member because this field was never written.
+      joinEvent.userUser = user.id;
       let hatIds = event.params.hatIds;
       for (let i = 0; i < hatIds.length; i++) {
         if (shouldCreateRoleWearer(contract.organization, hatIds[i], event.params.user)) {
@@ -346,6 +390,8 @@ export function handleRegisterAndQuickJoined(event: RegisterAndQuickJoinedEvent)
       }
     }
   }
+
+  joinEvent.save();
 }
 
 export function handleRegisterAndQuickJoinedWithPasskey(event: RegisterAndQuickJoinedWithPasskeyEvent): void {

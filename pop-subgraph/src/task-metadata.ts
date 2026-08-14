@@ -1,5 +1,6 @@
 import { BigDecimal, BigInt, Bytes, dataSource, json, JSONValueKind } from "@graphprotocol/graph-ts";
 import { TaskMetadata } from "../generated/schema";
+import { jsonToBigDecimal, jsonToBigInt } from "./json-utils";
 
 /**
  * Handler for IPFS file data source that parses task metadata JSON.
@@ -83,9 +84,9 @@ export function handleTaskMetadata(content: Bytes): void {
   }
 
   // Parse estHours (supports fractional values like 0.5)
-  let estHoursValue = jsonObject.get("estHours");
-  if (estHoursValue != null && !estHoursValue.isNull() && estHoursValue.kind == JSONValueKind.NUMBER) {
-    metadata.estimatedHours = BigDecimal.fromString(estHoursValue.toF64().toString());
+  let estHours = jsonToBigDecimal(jsonObject.get("estHours"));
+  if (estHours !== null) {
+    metadata.estimatedHours = estHours;
   }
 
   // Parse submission content (for submission metadata entities)
@@ -104,14 +105,9 @@ export function handleTaskMetadata(content: Bytes): void {
   // Parse optional soft due date (unix seconds, written by the frontend; v6).
   // Display-only — never enforced on-chain. Tolerates absence and wrong types;
   // fractional values are truncated (same pattern as proposal-metadata timestamps).
-  let dueDateValue = jsonObject.get("dueDate");
-  if (dueDateValue != null && !dueDateValue.isNull() && dueDateValue.kind == JSONValueKind.NUMBER) {
-    let raw = dueDateValue.toF64().toString();
-    let dotIndex = raw.indexOf(".");
-    if (dotIndex >= 0) {
-      raw = raw.substring(0, dotIndex);
-    }
-    metadata.dueDate = BigInt.fromString(raw);
+  let dueDate = jsonToBigInt(jsonObject.get("dueDate"));
+  if (dueDate !== null) {
+    metadata.dueDate = dueDate;
   }
 
   metadata.save();

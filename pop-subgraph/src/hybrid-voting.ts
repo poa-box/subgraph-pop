@@ -6,7 +6,6 @@ import {
   ThresholdPctSet,
   QuorumSet,
   HatSet,
-  HatToggled,
   NewProposal,
   NewHatProposal,
   VoteCast,
@@ -27,7 +26,7 @@ import {
   ProposalMetadata
 } from "../generated/schema";
 import { ProposalMetadata as ProposalMetadataTemplate } from "../generated/templates";
-import { getUsernameForAddress, loadExistingUser, createHatPermission, createExecutorChange, getOrCreateRole, backfillHatPermissions } from "./utils";
+import { getUsernameForAddress, loadExistingUser, createExecutorChange, getOrCreateRole, backfillHatPermissions } from "./utils";
 
 // Zero hash constant for comparison
 const ZERO_HASH = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -179,14 +178,15 @@ export function handleQuorumSet(event: QuorumSet): void {
     return;
   }
 
-  contract.quorum = event.params.quorum.toI32();
+  // quorum is uint32 on-chain; stored raw as BigInt because .toI32() aborts above 2^31-1.
+  contract.quorum = event.params.quorum;
   contract.save();
 
   let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
   let change = new HybridVotingQuorumChange(changeId);
 
   change.hybridVoting = event.address;
-  change.newQuorum = event.params.quorum.toI32();
+  change.newQuorum = event.params.quorum;
   change.changedAt = event.block.timestamp;
   change.changedAtBlock = event.block.number;
   change.transactionHash = event.transaction.hash;
@@ -231,48 +231,6 @@ export function handleHatSet(event: HatSet): void {
 
   permission.allowed = event.params.allowed;
   permission.hatType = event.params.hatType;
-  permission.setAt = event.block.timestamp;
-  permission.setAtBlock = event.block.number;
-  permission.transactionHash = event.transaction.hash;
-  permission.save();
-}
-
-/**
- * Handler for HatToggled event
- * Creates or updates hat permissions (without type information)
- */
-export function handleHatToggled(event: HatToggled): void {
-  let contract = HybridVotingContract.load(event.address);
-  if (!contract) {
-    return;
-  }
-
-  // HatToggled doesn't have hatType, default to Voter role
-  let permissionRole = "Voter";
-
-  // Create or update consolidated HatPermission entity
-  let permissionId =
-    event.address.toHexString() +
-    "-" +
-    event.params.hatId.toString() +
-    "-" +
-    permissionRole;
-
-  let permission = HatPermission.load(permissionId);
-  if (!permission) {
-    permission = new HatPermission(permissionId);
-    permission.contractAddress = event.address;
-    permission.contractType = "HybridVoting";
-    permission.organization = contract.organization;
-    permission.hatId = event.params.hatId;
-    permission.permissionRole = permissionRole;
-  }
-
-  // Link to Role entity
-  let role = getOrCreateRole(contract.organization, event.params.hatId, event);
-  permission.role = role.id;
-
-  permission.allowed = event.params.allowed;
   permission.setAt = event.block.timestamp;
   permission.setAtBlock = event.block.number;
   permission.transactionHash = event.transaction.hash;

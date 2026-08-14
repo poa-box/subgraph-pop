@@ -4,7 +4,6 @@ import {
   Initialized as InitializedEvent,
   CreatorHatSet as CreatorHatSetEvent,
   ExecutorSet as ExecutorSetEvent,
-  HatToggled as HatToggledEvent,
   HatsSet as HatsSetEvent,
   MemberHatSet as MemberHatSetEvent,
   ModuleCompleted as ModuleCompletedEvent,
@@ -43,9 +42,21 @@ function bytes32ToCid(hash: Bytes): string {
 }
 
 /**
- * Helper to create an IPFS file data source for education module content.
+ * EducationModuleMetadata entity id, scoped by the owning module (the row carries a `module`
+ * pointer). Mirrors TaskMetadata's `taskId-ipfsCid` shape.
  */
-function createEducationModuleMetadataSource(contentHash: Bytes, moduleEntityId: string, timestamp: BigInt): void {
+export function educationModuleMetadataId(moduleEntityId: string, ipfsCid: string): string {
+  return moduleEntityId + "-" + ipfsCid;
+}
+
+/**
+ * Helper to create an IPFS file data source for education module content.
+ *
+ * Context carries moduleEntityId and nothing per-block, so re-emitting an unchanged contentHash
+ * (e.g. a payout-only ModuleUpdated) dedupes instead of re-INSERTing this immutable id. See the
+ * file data source context rule in CLAUDE.md.
+ */
+function createEducationModuleMetadataSource(contentHash: Bytes, moduleEntityId: string): void {
   let zeroHash = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
   if (contentHash.equals(zeroHash)) {
     return;
@@ -53,16 +64,16 @@ function createEducationModuleMetadataSource(contentHash: Bytes, moduleEntityId:
 
   let ipfsCid = bytes32ToCid(contentHash);
 
-  // EducationModuleMetadata is immutable — skip if already indexed to prevent
-  // duplicate INSERT conflicts when the same CID triggers multiple times
-  let existing = EducationModuleMetadata.load(ipfsCid);
+  // Same-region safety net only; cross-block dedup is graph-node's job via the context above.
+  let existing = EducationModuleMetadata.load(
+    educationModuleMetadataId(moduleEntityId, ipfsCid)
+  );
   if (existing != null) {
     return;
   }
 
   let context = new DataSourceContext();
   context.setString("moduleEntityId", moduleEntityId);
-  context.setBigInt("timestamp", timestamp);
 
   EducationModuleMetadataTemplate.createWithContext(ipfsCid, context);
 }
@@ -88,14 +99,15 @@ export function handleModuleCreated(event: ModuleCreatedEvent): void {
   module.createdAt = event.block.timestamp;
   module.createdAtBlock = event.block.number;
 
-  // Set metadata link (CID) for the EducationModuleMetadata entity
+  // Set metadata link for the EducationModuleMetadata entity. Module-scoped, not the bare CID —
+  // see educationModuleMetadataId.
   let contentCid = bytes32ToCid(event.params.contentHash);
-  module.metadata = contentCid;
+  module.metadata = educationModuleMetadataId(moduleEntityId, contentCid);
 
   module.save();
 
   // Create IPFS data source to fetch and index module content
-  createEducationModuleMetadataSource(event.params.contentHash, moduleEntityId, event.block.timestamp);
+  createEducationModuleMetadataSource(event.params.contentHash, moduleEntityId);
 
   // Update nextModuleId on contract
   let contract = EducationHubContract.load(contractAddress);
@@ -162,14 +174,15 @@ export function handleModuleUpdated(event: ModuleUpdatedEvent): void {
     module.updatedAt = event.block.timestamp;
     module.updatedAtBlock = event.block.number;
 
-    // Update metadata link to new content
+    // Update metadata link to new content (module-scoped — see educationModuleMetadataId)
     let contentCid = bytes32ToCid(event.params.contentHash);
-    module.metadata = contentCid;
+    module.metadata = educationModuleMetadataId(moduleEntityId, contentCid);
 
     module.save();
 
-    // Create IPFS data source to fetch and index updated module content
-    createEducationModuleMetadataSource(event.params.contentHash, moduleEntityId, event.block.timestamp);
+    // Create IPFS data source to fetch and index updated module content. Safe to call with an
+    // unchanged contentHash: the context is module-scoped only, so graph-node dedupes it.
+    createEducationModuleMetadataSource(event.params.contentHash, moduleEntityId);
   }
 
   // Create historical update record
@@ -265,45 +278,6 @@ export function handleMemberHatSet(event: MemberHatSetEvent): void {
   permission.role = role.id;
 
   permission.allowed = event.params.enabled;
-  permission.setAt = event.block.timestamp;
-  permission.setAtBlock = event.block.number;
-  permission.transactionHash = event.transaction.hash;
-  permission.save();
-}
-
-export function handleHatToggled(event: HatToggledEvent): void {
-  // HatToggled event could apply to either creator or member hats
-  // This is a generic toggle event - we'll track it but might not know the hat type
-  // The specific setCreatorHatAllowed/setMemberHatAllowed events are more precise
-  // For now, we'll handle this as a member hat since that's the completion permission
-
-  let contract = EducationHubContract.load(event.address);
-  if (!contract) {
-    return;
-  }
-
-  // Create or update consolidated HatPermission entity with Member role
-  let permissionId =
-    event.address.toHexString() +
-    "-" +
-    event.params.hatId.toString() +
-    "-Member";
-
-  let permission = HatPermission.load(permissionId);
-  if (!permission) {
-    permission = new HatPermission(permissionId);
-    permission.contractAddress = event.address;
-    permission.contractType = "EducationHub";
-    permission.organization = contract.organization;
-    permission.hatId = event.params.hatId;
-    permission.permissionRole = "Member";
-  }
-
-  // Link to Role entity
-  let role = getOrCreateRole(contract.organization, event.params.hatId, event);
-  permission.role = role.id;
-
-  permission.allowed = event.params.allowed;
   permission.setAt = event.block.timestamp;
   permission.setAtBlock = event.block.number;
   permission.transactionHash = event.transaction.hash;

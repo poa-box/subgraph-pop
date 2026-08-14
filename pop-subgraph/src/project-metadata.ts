@@ -13,10 +13,15 @@ export function handleProjectMetadata(content: Bytes): void {
   let context = dataSource.context();
   let projectId = context.getString("projectId");
 
+  // Project-scoped id, matching projectMetadataId() in task-manager.ts and the context key above.
+  // Not the bare CID: this row carries a `project` pointer, so two projects with identical
+  // metadata JSON (same CID) would otherwise fight over one row.
+  let entityId = projectId + "-" + ipfsHash;
+
   // Load or create the ProjectMetadata entity using the IPFS hash as ID
-  let metadata = ProjectMetadata.load(ipfsHash);
+  let metadata = ProjectMetadata.load(entityId);
   if (metadata == null) {
-    metadata = new ProjectMetadata(ipfsHash);
+    metadata = new ProjectMetadata(entityId);
     metadata.project = projectId;
     metadata.indexedAt = BigInt.fromI32(0);
   }

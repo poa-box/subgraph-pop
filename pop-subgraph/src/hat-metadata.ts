@@ -25,11 +25,16 @@ export function handleHatMetadata(content: Bytes): void {
   let context = dataSource.context();
   let hatEntityId = context.getString("hatEntityId");
 
+  // Hat-scoped id, matching hatMetadataId() in eligibility-module.ts and the context key above.
+  // Not the bare CID: this row carries a `hat` pointer, so a CID-keyed row could only ever point
+  // at one of the hats sharing that CID (two roles with identical name/description JSON collide).
+  let entityId = hatEntityId + "-" + ipfsHash;
+
   // Try to parse the JSON content
   let jsonResult = json.try_fromBytes(content);
   if (jsonResult.isError) {
     // JSON parsing failed - create entity with just the ID and hat link
-    let metadata = new HatMetadata(ipfsHash);
+    let metadata = new HatMetadata(entityId);
     metadata.hat = hatEntityId;
     metadata.save();
     return;
@@ -40,9 +45,9 @@ export function handleHatMetadata(content: Bytes): void {
     let jsonObject = jsonValue.toObject();
 
     // Create or load the metadata entity
-    let metadata = HatMetadata.load(ipfsHash);
+    let metadata = HatMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new HatMetadata(ipfsHash);
+      metadata = new HatMetadata(entityId);
     }
 
     // Link to hat
@@ -73,7 +78,7 @@ export function handleHatMetadata(content: Bytes): void {
     metadata.save();
   } else {
     // Not a JSON object - create entity with just the ID and hat link
-    let metadata = new HatMetadata(ipfsHash);
+    let metadata = new HatMetadata(entityId);
     metadata.hat = hatEntityId;
     metadata.save();
   }

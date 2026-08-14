@@ -45,7 +45,10 @@ import {
   EducationHubContract,
   PaymentManagerContract,
   TaskManager,
-  ToggleModuleContract
+  ToggleModuleContract,
+  Proposal,
+  DDVProposal,
+  BatchExecution
 } from "../generated/schema";
 
 /**
@@ -99,7 +102,7 @@ function setupExecutorEntities(): void {
   hybridVoting.organization = orgId;
   hybridVoting.executor = Address.zero();
   hybridVoting.thresholdPct = 0;
-  hybridVoting.quorum = 0;
+  hybridVoting.quorum = BigInt.fromI32(0);
   hybridVoting.hats = Address.zero();
   hybridVoting.classVersion = BigInt.fromI32(0);
   hybridVoting.createdAt = BigInt.fromI32(1000);
@@ -111,7 +114,7 @@ function setupExecutorEntities(): void {
   ddv.organization = orgId;
   ddv.executor = Address.zero();
   ddv.thresholdPct = 0;
-  ddv.quorum = 0;
+  ddv.quorum = BigInt.fromI32(0);
   ddv.hats = Address.zero();
   ddv.createdAt = BigInt.fromI32(1000);
   ddv.createdAtBlock = BigInt.fromI32(100);
@@ -318,6 +321,137 @@ describe("Executor", () => {
     handleBatchExecuted(event);
 
     assert.entityCount("BatchExecution", 1);
+  });
+
+  // HybridVoting and DirectDemocracyVoting keep INDEPENDENT proposal counters, so both routinely
+  // have a proposal with the same id. Executor.execute() reverts unless msg.sender ==
+  // allowedCaller, so allowedCaller is what disambiguates them — matching on proposalId alone
+  // attached every execution to both proposals.
+  test("BatchExecuted attributes the proposal via allowedCaller, not proposalId alone", () => {
+    setupExecutorEntities();
+
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let hvAddress = Address.fromString("0x00000000000000000000000000000000000000b1");
+    let ddvAddress = Address.fromString("0x00000000000000000000000000000000000000b2");
+    let proposalId = BigInt.fromI32(0);
+
+    // Both voting contracts exist on the org, and BOTH have a proposal 0.
+    let org = Organization.load(orgId)!;
+    org.hybridVoting = hvAddress;
+    org.directDemocracyVoting = ddvAddress;
+    org.save();
+
+    let hvProposal = new Proposal(hvAddress.toHexString() + "-0");
+    hvProposal.proposalId = proposalId;
+    hvProposal.hybridVoting = hvAddress;
+    hvProposal.creator = Address.zero();
+    hvProposal.proposer = Address.zero();
+    hvProposal.classesVersion = BigInt.fromI32(0);
+    hvProposal.title = "hv";
+    hvProposal.descriptionHash = Bytes.fromHexString("0xabcd");
+    hvProposal.numOptions = 2;
+    hvProposal.startTimestamp = BigInt.fromI32(1000);
+    hvProposal.endTimestamp = BigInt.fromI32(2000);
+    hvProposal.isHatRestricted = false;
+    hvProposal.restrictedHatIds = [];
+    hvProposal.status = "Active";
+    hvProposal.wasExecuted = false;
+    hvProposal.executionFailed = false;
+    hvProposal.createdAtBlock = BigInt.fromI32(100);
+    hvProposal.transactionHash = Bytes.fromHexString("0xabcd");
+    hvProposal.save();
+
+    let ddvProposal = new DDVProposal(ddvAddress.toHexString() + "-0");
+    ddvProposal.proposalId = proposalId;
+    ddvProposal.directDemocracyVoting = ddvAddress;
+    ddvProposal.proposer = Address.zero();
+    ddvProposal.title = "ddv";
+    ddvProposal.descriptionHash = Bytes.fromHexString("0xabcd");
+    ddvProposal.numOptions = 2;
+    ddvProposal.startTimestamp = BigInt.fromI32(1000);
+    ddvProposal.endTimestamp = BigInt.fromI32(2000);
+    ddvProposal.isHatRestricted = false;
+    ddvProposal.restrictedHatIds = [];
+    ddvProposal.status = "Active";
+    ddvProposal.executionFailed = false;
+    ddvProposal.createdAtBlock = BigInt.fromI32(100);
+    ddvProposal.transactionHash = Bytes.fromHexString("0xabcd");
+    ddvProposal.save();
+
+    // The executor's sole authorised governor is HybridVoting.
+    let executor = ExecutorContract.load(
+      Address.fromString("0xa16081f360e3847006db660bae1c6d1b2e17ec2a")
+    )!;
+    executor.allowedCaller = hvAddress;
+    executor.save();
+
+    let batchEvent = createBatchExecutedEvent(proposalId, BigInt.fromI32(1));
+    handleBatchExecuted(batchEvent);
+
+    let batchId = batchEvent.transaction.hash
+      .concat(batchEvent.address)
+      .concat(Bytes.fromByteArray(Bytes.fromBigInt(proposalId)));
+
+    // Only the HybridVoting proposal is attached — NOT both.
+    assert.fieldEquals(
+      "BatchExecution",
+      batchId.toHexString(),
+      "hybridProposal",
+      hvAddress.toHexString() + "-0"
+    );
+    let stored = BatchExecution.load(batchId)!;
+    assert.assertTrue(stored.ddvProposal === null);
+  });
+
+  // The whole point of keying BatchExecution on (txHash, executor, proposalId) is that
+  // handleCallExecuted can derive the SAME id — the old code guessed logIndex+1, which only ever
+  // resolved for the final call of a batch. Without this assertion a swapped argument order or an
+  // encoding change would leave BatchExecution.calls empty in production and every count-based
+  // test would still pass.
+  test("CallExecuted links to the BatchExecution for the same proposal", () => {
+    setupExecutorEntities();
+
+    let proposalId = BigInt.fromI32(7);
+
+    // Two calls, then the trailing batch — the real emission order.
+    let call0 = createCallExecutedEvent(
+      proposalId,
+      BigInt.fromI32(0),
+      Address.fromString("0x0000000000000000000000000000000000000002"),
+      BigInt.fromI32(1000)
+    );
+    handleCallExecuted(call0);
+
+    let call1 = createCallExecutedEvent(
+      proposalId,
+      BigInt.fromI32(1),
+      Address.fromString("0x0000000000000000000000000000000000000003"),
+      BigInt.zero()
+    );
+    handleCallExecuted(call1);
+
+    let batchEvent = createBatchExecutedEvent(proposalId, BigInt.fromI32(2));
+    handleBatchExecuted(batchEvent);
+
+    assert.entityCount("BatchExecution", 1);
+    assert.entityCount("CallExecution", 2);
+
+    // Both calls must point at the one batch, not just the last one.
+    let batchId = batchEvent.transaction.hash
+      .concat(batchEvent.address)
+      .concat(Bytes.fromByteArray(Bytes.fromBigInt(proposalId)));
+
+    let call0Id = call0.transaction.hash
+      .concatI32(call0.logIndex.toI32())
+      .concat(Bytes.fromByteArray(Bytes.fromBigInt(BigInt.fromI32(0))));
+    let call1Id = call1.transaction.hash
+      .concatI32(call1.logIndex.toI32())
+      .concat(Bytes.fromByteArray(Bytes.fromBigInt(BigInt.fromI32(1))));
+
+    assert.fieldEquals("CallExecution", call0Id.toHexString(), "batch", batchId.toHexString());
+    assert.fieldEquals("CallExecution", call1Id.toHexString(), "batch", batchId.toHexString());
   });
 
   test("CallExecuted creates CallExecution entity", () => {

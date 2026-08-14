@@ -24,7 +24,8 @@ import {
   TaskDeadlinesSet,
   TaskClaimDeadlineSet,
   TaskClaimExpired,
-  TaskUnclaimed
+  TaskUnclaimed,
+  ExecutorUpdated
 } from "../generated/templates/TaskManager/TaskManager";
 import {
   Project,
@@ -46,7 +47,7 @@ import {
   TaskClaimExpiry,
   TaskRelease
 } from "../generated/schema";
-import { getUsernameForAddress, loadExistingUser } from "./utils";
+import { createExecutorChange, getUsernameForAddress, loadExistingUser } from "./utils";
 
 /**
  * Helper function to create a composite Project ID.
@@ -137,6 +138,10 @@ function createTaskMetadataSource(metadataHash: Bytes, taskId: string): void {
  * Uses DataSourceContext to pass the projectId to the handler
  * so it can link the metadata back to the project.
  */
+export function projectMetadataId(projectId: string, ipfsCid: string): string {
+  return projectId + "-" + ipfsCid;
+}
+
 function createProjectMetadataSource(metadataHash: Bytes, projectId: string): void {
   // Skip if metadataHash is empty (all zeros)
   let zeroHash = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -147,8 +152,8 @@ function createProjectMetadataSource(metadataHash: Bytes, projectId: string): vo
   // Convert bytes32 sha256 digest to IPFS CIDv0 string
   let ipfsCid = bytes32ToCid(metadataHash);
 
-  // Skip if ProjectMetadata already exists - prevents duplicate file data sources
-  let existingMetadata = ProjectMetadata.load(ipfsCid);
+  // Same-region safety net only; cross-block dedup is graph-node's (template, CID, context) key.
+  let existingMetadata = ProjectMetadata.load(projectMetadataId(projectId, ipfsCid));
   if (existingMetadata != null) {
     return;
   }
@@ -187,14 +192,34 @@ export function handleProjectCreated(event: ProjectCreated): void {
   project.createdAtBlock = event.block.number;
   project.deleted = false;
 
-  // Set metadata link (CID) for the ProjectMetadata entity that will be created by IPFS handler
+  // Set metadata link for the ProjectMetadata entity created by the IPFS handler. Project-scoped
+  // id (not the bare CID) — see projectMetadataId.
   let metadataCid = bytes32ToCid(event.params.metadataHash);
-  project.metadata = metadataCid;
+  project.metadata = projectMetadataId(projectEntityId, metadataCid);
 
   project.save();
 
   // Create IPFS data source to fetch and index project metadata
   createProjectMetadataSource(event.params.metadataHash, projectEntityId);
+}
+
+/**
+ * ExecutorUpdated — record the change in the consolidated ExecutorChange history, matching what
+ * DirectDemocracyVoting, QuickJoin and HybridVoting already do. TaskManager stores no current
+ * executor field, so this is history only.
+ */
+export function handleExecutorUpdated(event: ExecutorUpdated): void {
+  let taskManager = TaskManager.load(event.address);
+  if (taskManager == null) {
+    return;
+  }
+  createExecutorChange(
+    event.address,
+    "TaskManager",
+    taskManager.organization,
+    event.params.newExecutor,
+    event
+  );
 }
 
 export function handleProjectDeleted(event: ProjectDeleted): void {
@@ -475,13 +500,12 @@ export function handleTaskApplicationSubmitted(event: TaskApplicationSubmitted):
     let applicationCid = bytes32ToCid(event.params.applicationHash);
     application.metadata = applicationCid;
 
-    // TaskApplicationMetadata is immutable — skip if already indexed
+    // No context: this entity writes no owner pointer, so the bare CID is a safe key and an empty
+    // context lets graph-node dedupe repeat references. See the file data source context rule in
+    // CLAUDE.md. Two applications sharing a CID correctly share one metadata row.
     let existingAppMeta = TaskApplicationMetadata.load(applicationCid);
     if (existingAppMeta == null) {
-      let context = new DataSourceContext();
-      context.setBigInt("timestamp", event.block.timestamp);
-
-      TaskApplicationMetadataTemplate.createWithContext(applicationCid, context);
+      TaskApplicationMetadataTemplate.create(applicationCid);
     }
   }
 

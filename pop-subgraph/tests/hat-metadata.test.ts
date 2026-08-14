@@ -101,8 +101,8 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Verify HatMetadata entity was created
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "description", "This is a role for managing administrative tasks");
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "description", "This is a role for managing administrative tasks");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
   });
 
   test("Creates HatMetadata entity with null description for missing field", () => {
@@ -124,9 +124,9 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Verify HatMetadata entity was created with hat link but no description
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
     // Description should be null (not set)
-    assert.assertNull(HatMetadata.load(ipfsHash)!.description);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.description);
   });
 
   test("Handles malformed JSON gracefully", () => {
@@ -148,8 +148,8 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Should still create entity with just ID and hat link
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.description);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.description);
   });
 
   test("Handles empty description string as null", () => {
@@ -171,7 +171,7 @@ describe("HatMetadata IPFS Handler", () => {
 
     assert.entityCount("HatMetadata", 1);
     // Empty strings are stored as null (consistent with Graph behavior)
-    assert.assertNull(HatMetadata.load(ipfsHash)!.description);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.description);
   });
 
   test("Handles non-string description type gracefully", () => {
@@ -193,8 +193,8 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Should create entity but not set description (wrong type)
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.description);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.description);
   });
 
   test("Handles null description value", () => {
@@ -216,8 +216,8 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Should create entity but not set description
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.description);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.description);
   });
 
   test("Parses long description correctly", () => {
@@ -239,7 +239,7 @@ describe("HatMetadata IPFS Handler", () => {
     handleHatMetadata(contentBytes);
 
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "description", longDescription);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "description", longDescription);
   });
 
   test("Sets indexedAt timestamp", () => {
@@ -259,7 +259,7 @@ describe("HatMetadata IPFS Handler", () => {
     handleHatMetadata(contentBytes);
 
     // Verify indexedAt is set (we use 0 as placeholder since file handlers don't have block context)
-    assert.fieldEquals("HatMetadata", ipfsHash, "indexedAt", "0");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "indexedAt", "0");
   });
 
   // Tests for name extraction from IPFS metadata
@@ -283,8 +283,8 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Verify HatMetadata entity was created with name
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "name", "Admin Role");
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "name", "Admin Role");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
   });
 
   test("Parses JSON with both name and description", () => {
@@ -306,9 +306,9 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Verify both fields are set
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "name", "Council Member");
-    assert.fieldEquals("HatMetadata", ipfsHash, "description", "A member of the governance council");
-    assert.fieldEquals("HatMetadata", ipfsHash, "hat", hatEntityId);
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "name", "Council Member");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "description", "A member of the governance council");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "hat", hatEntityId);
   });
 
   test("Does not modify Hat entity from IPFS handler (avoids causality region conflict)", () => {
@@ -328,7 +328,7 @@ describe("HatMetadata IPFS Handler", () => {
     handleHatMetadata(contentBytes);
 
     // HatMetadata should have the name from IPFS
-    assert.fieldEquals("HatMetadata", ipfsHash, "name", "Treasury Manager");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "name", "Treasury Manager");
 
     // Hat entity should NOT be modified by the IPFS handler
     let hatAfter = Hat.load(hatEntityId);
@@ -355,7 +355,7 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Empty strings should be treated as null
     assert.entityCount("HatMetadata", 1);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.name);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.name);
 
     // Hat.name should remain null
     let hat = Hat.load(hatEntityId);
@@ -381,7 +381,7 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Should create entity but not set name
     assert.entityCount("HatMetadata", 1);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.name);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.name);
   });
 
   test("Handles non-string name type gracefully", () => {
@@ -403,7 +403,7 @@ describe("HatMetadata IPFS Handler", () => {
 
     // Should create entity but not set name (wrong type)
     assert.entityCount("HatMetadata", 1);
-    assert.assertNull(HatMetadata.load(ipfsHash)!.name);
+    assert.assertNull(HatMetadata.load(hatEntityId + "-" + ipfsHash)!.name);
   });
 
   test("Does not update Hat entity if Hat does not exist", () => {
@@ -424,7 +424,7 @@ describe("HatMetadata IPFS Handler", () => {
 
     // HatMetadata should still be created
     assert.entityCount("HatMetadata", 1);
-    assert.fieldEquals("HatMetadata", ipfsHash, "name", "Orphan Role");
+    assert.fieldEquals("HatMetadata", hatEntityId + "-" + ipfsHash, "name", "Orphan Role");
 
     // Hat should not exist
     assert.assertNull(Hat.load(hatEntityId));

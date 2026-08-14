@@ -1,4 +1,4 @@
-import { Address, BigInt, Bytes } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, log } from "@graphprotocol/graph-ts";
 import { OrgDeployed, RolesCreated, InitialWearersAssigned } from "../generated/templates/OrgDeployer/OrgDeployer";
 import {
   Organization,
@@ -58,7 +58,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   let hybridVoting = new HybridVotingContract(event.params.hybridVoting);
   hybridVoting.executor = Address.zero(); // Will be set by Initialized event
   hybridVoting.thresholdPct = 0; // Will be set by ThresholdPctSet event
-  hybridVoting.quorum = 0; // Will be set by QuorumSet event
+  hybridVoting.quorum = BigInt.fromI32(0); // Will be set by QuorumSet event
   hybridVoting.hats = Address.zero(); // Will be set by Initialized event
   hybridVoting.classVersion = BigInt.fromI32(0); // Will be set by ClassesReplaced event
   hybridVoting.createdAt = event.block.timestamp;
@@ -68,7 +68,7 @@ export function handleOrgDeployed(event: OrgDeployed): void {
   let directDemocracyVoting = new DirectDemocracyVotingContract(event.params.directDemocracyVoting);
   directDemocracyVoting.executor = Address.zero(); // Will be set by ExecutorUpdated event
   directDemocracyVoting.thresholdPct = 0; // Will be set by ThresholdPctSet event
-  directDemocracyVoting.quorum = 0; // Will be set by QuorumSet event
+  directDemocracyVoting.quorum = BigInt.fromI32(0); // Will be set by QuorumSet event
   directDemocracyVoting.hats = Address.zero(); // Will be set by Initialized event
   directDemocracyVoting.createdAt = event.block.timestamp;
   directDemocracyVoting.createdAtBlock = event.block.number;
@@ -294,7 +294,23 @@ export function handleInitialWearersAssigned(event: InitialWearersAssigned): voi
   let wearers = event.params.wearers;
   let hatIds = event.params.hatIds;
 
-  for (let i = 0; i < wearers.length; i++) {
+  // wearers[] and hatIds[] are parallel, but nothing in the event guarantees equal lengths.
+  // AssemblyScript bounds-checks array access, so a shorter hatIds[] would abort the mapping and
+  // halt indexing for the entire subgraph. Iterate the shorter of the two and log the mismatch.
+  let pairCount = wearers.length < hatIds.length ? wearers.length : hatIds.length;
+  if (wearers.length != hatIds.length) {
+    log.warning(
+      "InitialWearersAssigned length mismatch for org {}: {} wearers vs {} hatIds; indexing {} pairs",
+      [
+        orgId.toHexString(),
+        wearers.length.toString(),
+        hatIds.length.toString(),
+        pairCount.toString()
+      ]
+    );
+  }
+
+  for (let i = 0; i < pairCount; i++) {
     let wearerAddress = wearers[i];
     let hatId = hatIds[i];
 

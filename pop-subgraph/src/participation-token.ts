@@ -1,4 +1,4 @@
-import { BigInt, Bytes, log, Address, DataSourceContext } from "@graphprotocol/graph-ts";
+import { BigInt, Bytes, log, Address } from "@graphprotocol/graph-ts";
 import { TokenRequestMetadata as TokenRequestMetadataTemplate } from "../generated/templates";
 import {
   ParticipationToken as ParticipationTokenAbi,
@@ -16,21 +16,20 @@ import {
 } from "../generated/templates/ParticipationToken/ParticipationToken";
 import {
   ParticipationTokenContract,
-  HatPermission,
   TokenRequest,
   TokenRequestMetadata,
   TokenBalance
 } from "../generated/schema";
-import { getOrCreateRole, loadExistingUser } from "./utils";
+import { createHatPermission, getUsernameForAddress, loadExistingUser } from "./utils";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 export function handleInitialized(event: InitializedEvent): void {
-  // Hydrate name + symbol from the freshly initialized token. Graph node
-  // permits current-state try_* contract calls on non-archive RPCs; only
-  // historical block-pinned reads require archive nodes. Without this,
-  // ParticipationTokenContract.{name,symbol} stays as the empty strings
-  // seeded by org-deployer.ts and the UI falls back to "Shares" forever.
+  // Hydrate name + symbol; otherwise they stay as the empty strings org-deployer.ts seeds and the
+  // UI shows "Shares" forever.
+  //
+  // graph-node pins every mapping eth_call to the indexed block via EIP-1898, so this needs an
+  // archive RPC. The try_ guards make an inadequate endpoint fail silently — see readme.md.
   let contract = ParticipationTokenContract.load(event.address);
   if (contract == null) {
     log.warning("ParticipationTokenContract not found at address {}", [
@@ -47,16 +46,8 @@ export function handleInitialized(event: InitializedEvent): void {
   if (!symbolResult.reverted) {
     contract.symbol = symbolResult.value;
   }
-  // executor and hats are set ONLY inside initialize() — there is no ExecutorUpdated/HatsSet
-  // event and no setter on ParticipationToken, so they are unreachable from logs. org-deployer.ts
-  // seeds both to the zero address with a "will be set by Initialized event" comment describing a
-  // mechanism that does not exist; without these two reads they stay zero forever, which is what
-  // every live row shows. Same current-state try_* mechanism as name/symbol above, which is
-  // already proven in production.
-  let executorResult = bound.try_executor();
-  if (!executorResult.reverted) {
-    contract.executor = executorResult.value;
-  }
+  // hats has no event and no setter, so this read is its only source. executor is deliberately NOT
+  // read: OrgDeployed carries it, org-deployer.ts already seeds it, and it is immutable.
   let hatsResult = bound.try_hats();
   if (!hatsResult.reverted) {
     contract.hatsContract = hatsResult.value;
@@ -162,31 +153,17 @@ export function handleMemberHatSet(event: MemberHatSetEvent): void {
   }
 
   // Create or update consolidated HatPermission entity with Member role
-  let permissionId =
-    event.address.toHexString() +
-    "-" +
-    event.params.hat.toString() +
-    "-Member";
-
-  let permission = HatPermission.load(permissionId);
-  if (!permission) {
-    permission = new HatPermission(permissionId);
-    permission.contractAddress = event.address;
-    permission.contractType = "ParticipationToken";
-    permission.organization = contract.organization;
-    permission.hatId = event.params.hat;
-    permission.permissionRole = "Member";
-  }
-
-  // Link to Role entity
-  let role = getOrCreateRole(contract.organization, event.params.hat, event);
-  permission.role = role.id;
-
-  permission.allowed = event.params.allowed;
-  permission.setAt = event.block.timestamp;
-  permission.setAtBlock = event.block.number;
-  permission.transactionHash = event.transaction.hash;
-  permission.save();
+  createHatPermission(
+    event.address,
+    "ParticipationToken",
+    contract.organization,
+    event.params.hat,
+    "Member",
+    event.params.allowed,
+    0,
+    false, // ParticipationToken permissions carry no hatType
+    event
+  );
 }
 
 export function handleApproverHatSet(event: ApproverHatSetEvent): void {
@@ -196,31 +173,55 @@ export function handleApproverHatSet(event: ApproverHatSetEvent): void {
   }
 
   // Create or update consolidated HatPermission entity with Approver role
-  let permissionId =
-    event.address.toHexString() +
-    "-" +
-    event.params.hat.toString() +
-    "-Approver";
+  createHatPermission(
+    event.address,
+    "ParticipationToken",
+    contract.organization,
+    event.params.hat,
+    "Approver",
+    event.params.allowed,
+    0,
+    false, // ParticipationToken permissions carry no hatType
+    event
+  );
+}
 
-  let permission = HatPermission.load(permissionId);
-  if (!permission) {
-    permission = new HatPermission(permissionId);
-    permission.contractAddress = event.address;
-    permission.contractType = "ParticipationToken";
-    permission.organization = contract.organization;
-    permission.hatId = event.params.hat;
-    permission.permissionRole = "Approver";
+/**
+ * Normalise a caller-supplied IPFS string to the canonical path graph-node will hand back via
+ * dataSource.stringParam(): trim surrounding whitespace and slashes, then strip an `ipfs://` or
+ * `ipfs/` prefix. Returns "" for anything that is not a plausible CID, so a junk string neither
+ * spawns a file data source nor writes a dangling TokenRequest.metadata pointer.
+ *
+ * Deliberately conservative — it does not re-encode CIDv1 between bases (graph-node does, and
+ * AssemblyScript has no multibase decoder here). The frontend writes CIDv0, which round-trips
+ * unchanged, so this covers every case the protocol actually produces.
+ */
+function normalizeCid(raw: string): string {
+  let s = raw.trim();
+
+  // strip a leading "ipfs://" or "/ipfs/" (in either order of slash trimming)
+  if (s.length > 7 && s.substring(0, 7) == "ipfs://") {
+    s = s.substring(7);
+  }
+  while (s.length > 0 && s.charAt(0) == "/") {
+    s = s.substring(1);
+  }
+  if (s.length > 5 && s.substring(0, 5) == "ipfs/") {
+    s = s.substring(5);
+  }
+  while (s.length > 0 && s.charAt(s.length - 1) == "/") {
+    s = s.substring(0, s.length - 1);
   }
 
-  // Link to Role entity
-  let role = getOrCreateRole(contract.organization, event.params.hat, event);
-  permission.role = role.id;
-
-  permission.allowed = event.params.allowed;
-  permission.setAt = event.block.timestamp;
-  permission.setAtBlock = event.block.number;
-  permission.transactionHash = event.transaction.hash;
-  permission.save();
+  // CIDv0 ("Qm..." base58, 46 chars) or CIDv1 ("bafy..." base32). Anything else is not addressable
+  // and would only produce a permanently unresolved file data source.
+  if (s.length == 46 && s.substring(0, 2) == "Qm") {
+    return s;
+  }
+  if (s.length > 4 && s.substring(0, 4) == "bafy") {
+    return s;
+  }
+  return "";
 }
 
 export function handleRequested(event: RequestedEvent): void {
@@ -240,19 +241,47 @@ export function handleRequested(event: RequestedEvent): void {
   tokenRequest.createdAtBlock = event.block.number;
   tokenRequest.transactionHash = event.transaction.hash;
 
-  // Set metadata link and create IPFS data source
-  // ipfsHash is already a CID string (not bytes32)
-  let ipfsCid = event.params.ipfsHash;
+  // Link the requester so User.tokenRequests resolves (it returned [] for every member because
+  // these two fields were never written) and keep the denormalised username in step with every
+  // sibling entity. loadExistingUser respects the "no phantom users" rule: it returns null for a
+  // requester who never joined, in which case the row simply keeps the raw address.
+  tokenRequest.requesterUsername = getUsernameForAddress(event.params.requester);
+  let ptContract = ParticipationTokenContract.load(contractAddress);
+  if (ptContract) {
+    let requester = loadExistingUser(
+      ptContract.organization,
+      event.params.requester,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (requester) {
+      tokenRequest.requesterUser = requester.id;
+      requester.totalTokenRequestsAmount = requester.totalTokenRequestsAmount.plus(
+        event.params.amount
+      );
+      requester.save();
+    }
+  }
+
+  // Set metadata link and create IPFS data source.
+  //
+  // Unique among this subgraph's metadata sites: requestTokens(uint96, string ipfsHash) takes a
+  // caller-supplied STRING and only checks it is non-empty, so it is not canonical by construction
+  // the way a bytes32ToCid() digest is. graph-node normalises the path before the file handler sees
+  // it (trims, strips an `ipfs://` or `/ipfs/` prefix, re-encodes the CID), so dataSource
+  // .stringParam() returns the CANONICAL form. Storing the raw string here would leave
+  // TokenRequest.metadata pointing at an id the file handler never writes, dangling forever.
+  // Normalise once and key both sides off the same value.
+  let ipfsCid = normalizeCid(event.params.ipfsHash);
   if (ipfsCid.length > 0) {
     tokenRequest.metadata = ipfsCid;
 
-    // TokenRequestMetadata is immutable — skip if already indexed
+    // No context: this entity writes no owner pointer, so the bare CID is a safe key and an empty
+    // context lets graph-node dedupe repeat references. See the file data source context rule in
+    // CLAUDE.md — a per-block value here double-INSERTs this immutable id and halts indexing.
     let existingMeta = TokenRequestMetadata.load(ipfsCid);
     if (existingMeta == null) {
-      let context = new DataSourceContext();
-      context.setBigInt("timestamp", event.block.timestamp);
-
-      TokenRequestMetadataTemplate.createWithContext(ipfsCid, context);
+      TokenRequestMetadataTemplate.create(ipfsCid);
     }
   }
 
@@ -275,6 +304,21 @@ export function handleRequestApproved(event: RequestApprovedEvent): void {
   tokenRequest.approver = event.params.approver;
   tokenRequest.approvedAt = event.block.timestamp;
   tokenRequest.approvedAtBlock = event.block.number;
+
+  // Link the approver so User.approvedTokenRequests resolves.
+  tokenRequest.approverUsername = getUsernameForAddress(event.params.approver);
+  let approverContract = ParticipationTokenContract.load(contractAddress);
+  if (approverContract) {
+    let approver = loadExistingUser(
+      approverContract.organization,
+      event.params.approver,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (approver) {
+      tokenRequest.approverUser = approver.id;
+    }
+  }
 
   tokenRequest.save();
 }

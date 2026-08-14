@@ -9,10 +9,12 @@ import {
 import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import {
   handleInitialized,
-  handleCreatorHatSet
+  handleCreatorHatSet,
+  handleHatSet
 } from "../src/direct-democracy-voting";
 import {
   createInitializedEvent,
+  createHatSetEvent,
   createCreatorHatSetEvent
 } from "./direct-democracy-voting-utils";
 import {
@@ -39,7 +41,7 @@ function setupDDVContract(contractAddress: Address): void {
   ddv.organization = orgId;
   ddv.executor = Address.zero();
   ddv.thresholdPct = 0;
-  ddv.quorum = 0;
+  ddv.quorum = BigInt.fromI32(0);
   ddv.hats = Address.zero();
   ddv.createdAt = BigInt.fromI32(1000);
   ddv.createdAtBlock = BigInt.fromI32(100);
@@ -62,6 +64,47 @@ function mockHatArray(contractAddress: Address, fnName: string, hatIds: BigInt[]
 describe("DirectDemocracyVoting", () => {
   afterEach(() => {
     clearStore();
+  });
+
+  // DirectDemocracyVoting declares `enum HatType { VOTING, CREATOR }` and setHatAllowed writes
+  // votingHatIds for VOTING(0) and creatorHatIds for CREATOR(1) before emitting HatSet. The
+  // handler must follow that discriminant — it previously hardcoded "Voter", so every creator
+  // grant was filed as a Voter permission.
+  describe("HatSet honours hatType", () => {
+    test("hatType VOTING(0) writes a Voter permission", () => {
+      let event = createHatSetEvent(0, BigInt.fromI32(1001), true);
+      setupDDVContract(event.address);
+
+      handleHatSet(event);
+
+      assert.entityCount("HatPermission", 1);
+      let pid = event.address.toHexString() + "-1001-Voter";
+      assert.fieldEquals("HatPermission", pid, "permissionRole", "Voter");
+      assert.fieldEquals("HatPermission", pid, "allowed", "true");
+    });
+
+    test("hatType CREATOR(1) writes a Creator permission, not a Voter one", () => {
+      let event = createHatSetEvent(1, BigInt.fromI32(1001), true);
+      setupDDVContract(event.address);
+
+      handleHatSet(event);
+
+      assert.entityCount("HatPermission", 1);
+      let pid = event.address.toHexString() + "-1001-Creator";
+      assert.fieldEquals("HatPermission", pid, "permissionRole", "Creator");
+      assert.fieldEquals("HatPermission", pid, "allowed", "true");
+    });
+
+    test("the same hat can hold both Voter and Creator rows without collision", () => {
+      let voting = createHatSetEvent(0, BigInt.fromI32(1001), true);
+      setupDDVContract(voting.address);
+      handleHatSet(voting);
+      handleHatSet(createHatSetEvent(1, BigInt.fromI32(1001), true));
+
+      assert.entityCount("HatPermission", 2);
+      assert.fieldEquals("HatPermission", voting.address.toHexString() + "-1001-Voter", "allowed", "true");
+      assert.fieldEquals("HatPermission", voting.address.toHexString() + "-1001-Creator", "allowed", "true");
+    });
   });
 
   describe("Initialized backfill", () => {

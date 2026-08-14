@@ -35,3 +35,6 @@ typechain-types
 
 # Hardhat files
 cache
+
+# Transient manifest snapshot taken by the network-specific build/deploy scripts
+.subgraph.yaml.orig
