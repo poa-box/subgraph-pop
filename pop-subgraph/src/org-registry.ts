@@ -21,7 +21,8 @@ import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templ
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
 import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
-import { getOrCreateRole } from "./utils";
+import { EducationHub as EducationHubAbi } from "../generated/templates/EducationHub/EducationHub";
+import { getOrCreateRole, backfillHatPermissions } from "./utils";
 
 // 20-byte zero address. Optional module pointers (e.g. Organization.educationHub) are set to the
 // zero-address entity at deploy time when the module was not deployed with the org.
@@ -340,6 +341,13 @@ function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: 
     // The module's own initializer events (TokenSet/HatsSet/ExecutorSet) were emitted before this
     // proxy's template exists, so they will not backfill. Seed the entity from known org context
     // instead; handleTokenSet/HatsSet/ExecutorSet will keep it current from here on.
+    //
+    // NOTE: for a hub registered post-deploy the initializer ran in an EARLIER BLOCK than this
+    // event (Decentral Park: hub initialized at 46464940, registered at 46465067), so those logs
+    // fall outside the data source's range and are unreachable — unlike the same-block
+    // deploy-time path in handleOrgDeployed, where graph-node does replay a block's earlier logs
+    // against a template created later in that same block. That is why every deploy-time hub has
+    // its Creator/Member rows and this one had none.
     let eduHub = new EducationHubContract(proxy);
     eduHub.organization = org.id;
     eduHub.token = org.participationToken !== null ? changetype<Bytes>(org.participationToken) : ZERO_ADDRESS;
@@ -356,7 +364,39 @@ function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: 
     org.save();
 
     // Index the module's modules/completions/permission changes from this block forward.
-    EducationHubTemplate.create(Address.fromBytes(proxy));
+    let hubAddress = Address.fromBytes(proxy);
+    EducationHubTemplate.create(hubAddress);
+
+    // Recover the hat grants announced by the unreachable initializer logs above. The hub is
+    // already initialized by the time it can be registered, so these getters are authoritative
+    // now; handleCreatorHatSet/handleMemberHatSet own every change from here on and the shared
+    // `address-hatId-role` id scheme keeps that handover idempotent. try_* so a hub whose
+    // implementation lacks the getters simply yields no rows instead of failing the block.
+    let hub = EducationHubAbi.bind(hubAddress);
+
+    let creatorHats = hub.try_creatorHatIds();
+    if (!creatorHats.reverted) {
+      backfillHatPermissions(
+        hubAddress,
+        "EducationHub",
+        org.id,
+        creatorHats.value,
+        "Creator",
+        event
+      );
+    }
+
+    let memberHats = hub.try_memberHatIds();
+    if (!memberHats.reverted) {
+      backfillHatPermissions(
+        hubAddress,
+        "EducationHub",
+        org.id,
+        memberHats.value,
+        "Member",
+        event
+      );
+    }
   }
 }
 

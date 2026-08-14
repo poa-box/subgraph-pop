@@ -182,18 +182,28 @@ export function createHatPermission(
 }
 
 /**
- * Backfill HatPermission rows for hats read directly from a voting contract's
- * on-chain enumeration — HybridVoting.creatorHats() and
- * DirectDemocracyVoting.creatorHats()/votingHats().
+ * Backfill HatPermission rows for hats read directly from a contract's on-chain
+ * enumeration — HybridVoting.creatorHats(),
+ * DirectDemocracyVoting.creatorHats()/votingHats(), and
+ * EducationHub.creatorHatIds()/memberHatIds().
  *
- * Why this is needed: both voting contracts seed these arrays inside
- * initialize() via HatManager.setHatInArray WITHOUT emitting a per-hat
- * HatSet/CreatorHatSet event — only the post-deploy setters emit. The
- * event-driven handlers therefore never see grants made AT DEPLOYMENT, so a
- * role that can create proposals/polls (or vote in polls) was rendered as "—"
- * in the org permissions matrix. Reading the authoritative on-chain set once,
- * at Initialized (after initialize() has run), closes that gap for both
- * already-deployed and future orgs.
+ * Why this is needed differs per caller, but the shape of the gap is the same:
+ * the per-hat event that would have created the row is not visible to the
+ * subgraph, so a role that can act on-chain renders as "—" in the org
+ * permissions matrix.
+ *
+ *  - Voting contracts (at Initialized): both seed these arrays inside
+ *    initialize() via HatManager.setHatInArray WITHOUT emitting a per-hat
+ *    HatSet/CreatorHatSet — only the post-deploy setters emit, so grants made
+ *    AT DEPLOYMENT are never announced.
+ *  - EducationHub (at ContractRegistered): initialize() DOES emit
+ *    CreatorHatSet/MemberHatSet, but a hub registered after its org was
+ *    deployed emits them BEFORE the ContractRegistered that spawns its data
+ *    source — in an earlier block, so those logs are outside the template's
+ *    range entirely. See wirePostDeployModule in org-registry.ts.
+ *
+ * Reading the authoritative on-chain set once, at a point where the contract is
+ * known to be initialized, closes the gap for both existing and future orgs.
  *
  * Idempotent with the event handlers by design: identical `address-hatId-role`
  * id scheme. If a row already exists we leave it untouched — an event carries
@@ -204,7 +214,7 @@ export function createHatPermission(
  * not carry it and no consumer keys off it (the matrix uses contractType +
  * permissionRole + allowed).
  */
-export function backfillVotingHatPermissions(
+export function backfillHatPermissions(
   contractAddress: Address,
   contractType: string,
   orgId: Bytes,

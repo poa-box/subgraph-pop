@@ -27,7 +27,7 @@ import {
   ProposalMetadata
 } from "../generated/schema";
 import { ProposalMetadata as ProposalMetadataTemplate } from "../generated/templates";
-import { getUsernameForAddress, loadExistingUser, createHatPermission, createExecutorChange, getOrCreateRole, backfillVotingHatPermissions } from "./utils";
+import { getUsernameForAddress, loadExistingUser, createHatPermission, createExecutorChange, getOrCreateRole, backfillHatPermissions } from "./utils";
 
 // Zero hash constant for comparison
 const ZERO_HASH = Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000");
@@ -101,7 +101,7 @@ export function handleInitialized(event: Initialized): void {
   let bound = HybridVotingAbi.bind(event.address);
   let creatorHats = bound.try_creatorHats();
   if (!creatorHats.reverted) {
-    backfillVotingHatPermissions(
+    backfillHatPermissions(
       event.address,
       "HybridVoting",
       contract.organization,
