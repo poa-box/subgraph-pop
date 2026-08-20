@@ -16,6 +16,7 @@ import {
 } from "../generated/templates/Executor/Executor";
 import {
   ExecutorContract,
+  Organization,
   CallerChange,
   BatchExecution,
   CallExecution,
@@ -78,12 +79,34 @@ export function handleCallerChangeCancelled(event: CallerChangeCancelledEvent): 
   }
 }
 
+/**
+ * Deterministic BatchExecution id, derivable from BOTH BatchExecuted and CallExecuted.
+ *
+ * Must not use logIndex: a CallExecuted at index i cannot know how many logs the remaining
+ * len-1-i targets will emit before the trailing BatchExecuted (only the LAST call sits at
+ * BatchExecuted.logIndex - 1, which is why the old `logIndex + 1` link happened to work for
+ * single-call batches and broke for every longer one). A proposal executes at most once, so
+ * (txHash, executor, proposalId) is unique and available on both events.
+ */
+function batchExecutionId(
+  executor: Address,
+  txHash: Bytes,
+  proposalId: BigInt
+): Bytes {
+  return txHash
+    .concat(executor)
+    .concat(Bytes.fromByteArray(Bytes.fromBigInt(proposalId)));
+}
+
 export function handleBatchExecuted(event: BatchExecutedEvent): void {
   let contractAddress = event.address;
   let proposalId = event.params.proposalId;
 
-  // Create batch execution record
-  let batchId = event.transaction.hash.concatI32(event.logIndex.toI32());
+  let batchId = batchExecutionId(
+    contractAddress,
+    event.transaction.hash,
+    proposalId
+  );
   let batch = new BatchExecution(batchId);
 
   batch.executor = contractAddress;
@@ -93,22 +116,50 @@ export function handleBatchExecuted(event: BatchExecutedEvent): void {
   batch.executedAtBlock = event.block.number;
   batch.transactionHash = event.transaction.hash;
 
-  // Try to link to a proposal if it exists
-  // First check HybridVoting proposals
+  // Attribute the batch to the proposal that authorised it. Executor.execute() reverts unless
+  // msg.sender == allowedCaller ("sole authorised governor"), so allowedCaller IS the governance
+  // contract that ran this batch — use it to pick the relation. Matching on proposalId alone would
+  // be wrong: HybridVoting and DirectDemocracyVoting keep independent proposal counters, so both
+  // typically have a proposal 0, 1, 2 ... and every execution would be attached to both.
+  //
+  // On current deployments allowedCaller is the HybridVoting proxy, so the DDV branch is
+  // defensive: a permanently null ddvProposal is expected, not an indexing bug.
   let executor = ExecutorContract.load(contractAddress);
   if (executor) {
-    // Get the HybridVoting contract address from the organization
-    // The proposal ID should match across voting contracts
-    let orgId = executor.organization;
+    let org = Organization.load(executor.organization);
+    if (org) {
+      let callerOrNull = executor.allowedCaller;
+      let hv = org.hybridVoting;
+      let ddv = org.directDemocracyVoting;
 
-    // Try HybridVoting proposal (format: hybridVoting-proposalId)
-    // We need to search for a proposal with this ID
-    // Since we don't know which voting contract, we'll try to find by proposalId
-    // This is a best-effort linking
+      // allowedCaller is nullable until the first CallerSet; without it there is nothing to
+      // disambiguate on, so leave both relations unset rather than guess.
+      if (callerOrNull !== null) {
+        let caller = callerOrNull as Bytes;
+        let matched = false;
 
-    // Note: In practice, we would need to know which voting contract executed
-    // For now, we leave hybridProposal and ddvProposal as null
-    // and could be enhanced later with additional event data
+        if (hv !== null) {
+          let hvAddress = hv as Bytes;
+          if (caller.equals(hvAddress)) {
+            matched = true;
+            let hybridId = hvAddress.toHexString() + "-" + proposalId.toString();
+            if (Proposal.load(hybridId) != null) {
+              batch.hybridProposal = hybridId;
+            }
+          }
+        }
+
+        if (!matched && ddv !== null) {
+          let ddvAddress = ddv as Bytes;
+          if (caller.equals(ddvAddress)) {
+            let ddvId = ddvAddress.toHexString() + "-" + proposalId.toString();
+            if (DDVProposal.load(ddvId) != null) {
+              batch.ddvProposal = ddvId;
+            }
+          }
+        }
+      }
+    }
   }
 
   batch.save();
@@ -135,13 +186,13 @@ export function handleCallExecuted(event: CallExecutedEvent): void {
   call.executedAtBlock = event.block.number;
   call.transactionHash = event.transaction.hash;
 
-  // Find the batch execution to link to
-  // The batch event is emitted after all calls, so we look for it in the same tx
-  // We use a pattern of txHash-logIndex where logIndex would be after all call events
-  // For simplicity, we'll construct the batch ID based on expected pattern
-  // Note: BatchExecuted comes after CallExecuted events
-  let batchId = event.transaction.hash.concatI32(event.logIndex.toI32() + 1);
-  call.batch = batchId;
+  // BatchExecuted is emitted after the calls, so the row may not exist yet — graph-node resolves
+  // the reference at query time.
+  call.batch = batchExecutionId(
+    contractAddress,
+    event.transaction.hash,
+    proposalId
+  );
 
   call.save();
 }
@@ -246,7 +297,7 @@ export function handleHatsMinted(event: HatsMintedEvent): void {
         user = createUserOnJoin(
           executor.organization,
           recipient,
-          "HatMint",
+          "ExecutorMint",
           event.block.timestamp,
           event.block.number
         );

@@ -6,7 +6,6 @@ import {
   ThresholdPctSet,
   QuorumSet,
   HatSet,
-  HatToggled,
   CreatorHatSet,
   TargetAllowed,
   NewProposal,
@@ -192,14 +191,15 @@ export function handleQuorumSet(event: QuorumSet): void {
     return;
   }
 
-  contract.quorum = event.params.quorum.toI32();
+  // quorum is uint32 on-chain; stored raw as BigInt because .toI32() aborts above 2^31-1.
+  contract.quorum = event.params.quorum;
   contract.save();
 
   let changeId = event.transaction.hash.concatI32(event.logIndex.toI32());
   let change = new DirectDemocracyVotingQuorumChange(changeId);
 
   change.directDemocracyVoting = event.address;
-  change.newQuorum = event.params.quorum.toI32();
+  change.newQuorum = event.params.quorum;
   change.changedAt = event.block.timestamp;
   change.changedAtBlock = event.block.number;
   change.transactionHash = event.transaction.hash;
@@ -217,12 +217,18 @@ export function handleHatSet(event: HatSet): void {
     return;
   }
 
-  // Create or update consolidated HatPermission entity with Voter role
+  // DirectDemocracyVoting declares `enum HatType { VOTING, CREATOR }`, and setHatAllowed writes
+  // votingHatIds for VOTING(0) and creatorHatIds for CREATOR(1) before emitting HatSet. The role
+  // must follow that discriminant — hardcoding "Voter" filed every creator-hat grant as a Voter
+  // permission (and, sharing the id, overwrote any real Voter row for the same hat).
+  let permissionRole = event.params.hatType == 1 ? "Creator" : "Voter";
+
   let permissionId =
     event.address.toHexString() +
     "-" +
     event.params.hat.toString() +
-    "-Voter";
+    "-" +
+    permissionRole;
 
   let permission = HatPermission.load(permissionId);
   if (!permission) {
@@ -231,7 +237,7 @@ export function handleHatSet(event: HatSet): void {
     permission.contractType = "DirectDemocracyVoting";
     permission.organization = contract.organization;
     permission.hatId = event.params.hat;
-    permission.permissionRole = "Voter";
+    permission.permissionRole = permissionRole;
   }
 
   // Link to Role entity
@@ -240,44 +246,6 @@ export function handleHatSet(event: HatSet): void {
 
   permission.allowed = event.params.allowed;
   permission.hatType = event.params.hatType;
-  permission.setAt = event.block.timestamp;
-  permission.setAtBlock = event.block.number;
-  permission.transactionHash = event.transaction.hash;
-  permission.save();
-}
-
-/**
- * Handler for HatToggled event
- * Creates or updates hat permissions (voting hats) without type information
- */
-export function handleHatToggled(event: HatToggled): void {
-  let contract = DirectDemocracyVotingContract.load(event.address);
-  if (!contract) {
-    return;
-  }
-
-  // Create or update consolidated HatPermission entity with Voter role
-  let permissionId =
-    event.address.toHexString() +
-    "-" +
-    event.params.hatId.toString() +
-    "-Voter";
-
-  let permission = HatPermission.load(permissionId);
-  if (!permission) {
-    permission = new HatPermission(permissionId);
-    permission.contractAddress = event.address;
-    permission.contractType = "DirectDemocracyVoting";
-    permission.organization = contract.organization;
-    permission.hatId = event.params.hatId;
-    permission.permissionRole = "Voter";
-  }
-
-  // Link to Role entity
-  let role = getOrCreateRole(contract.organization, event.params.hatId, event);
-  permission.role = role.id;
-
-  permission.allowed = event.params.allowed;
   permission.setAt = event.block.timestamp;
   permission.setAtBlock = event.block.number;
   permission.transactionHash = event.transaction.hash;

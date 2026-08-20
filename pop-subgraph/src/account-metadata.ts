@@ -19,11 +19,16 @@ export function handleAccountMetadata(content: Bytes): void {
   let context = dataSource.context();
   let userAddress = context.getBytes("userAddress");
 
+  // Account-scoped id, matching accountMetadataId() in universal-account-registry.ts and the
+  // context key above. Not the bare CID: this row carries an `account` pointer, so two accounts
+  // with identical profile JSON would otherwise overwrite each other and cross-link.
+  let entityId = userAddress.toHexString() + "-" + ipfsHash;
+
   let jsonResult = json.try_fromBytes(content);
   if (jsonResult.isError) {
-    let metadata = AccountMetadata.load(ipfsHash);
+    let metadata = AccountMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new AccountMetadata(ipfsHash);
+      metadata = new AccountMetadata(entityId);
       metadata.account = userAddress;
       metadata.save();
     }
@@ -35,9 +40,9 @@ export function handleAccountMetadata(content: Bytes): void {
     let jsonObject = jsonValue.toObject();
 
     // Load or create — profile metadata is mutable (user can update)
-    let metadata = AccountMetadata.load(ipfsHash);
+    let metadata = AccountMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new AccountMetadata(ipfsHash);
+      metadata = new AccountMetadata(entityId);
     }
 
     metadata.account = userAddress;
@@ -70,9 +75,9 @@ export function handleAccountMetadata(content: Bytes): void {
     metadata.indexedAt = BigInt.fromI32(0);
     metadata.save();
   } else {
-    let metadata = AccountMetadata.load(ipfsHash);
+    let metadata = AccountMetadata.load(entityId);
     if (metadata == null) {
-      metadata = new AccountMetadata(ipfsHash);
+      metadata = new AccountMetadata(entityId);
       metadata.account = userAddress;
       metadata.save();
     }

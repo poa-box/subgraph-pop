@@ -12,17 +12,18 @@ import { TaskApplicationMetadata } from "../generated/schema";
  */
 export function handleTaskApplicationMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
-  let context = dataSource.context();
-  let timestamp = context.getBigInt("timestamp");
 
-  // Immutable - skip if already exists
+  // No context is read here. This entity writes no owner pointer, so the spawning site passes
+  // no context at all — that is what lets graph-node's (template, CID, context) dedup collapse
+  // repeat references to one data source instead of double-INSERTing this immutable id.
+  // File data sources have no block context, so indexedAt is fixed at 0 (as in org-metadata.ts).
   let existing = TaskApplicationMetadata.load(ipfsCid);
   if (existing != null) {
     return;
   }
 
   let metadata = new TaskApplicationMetadata(ipfsCid);
-  metadata.indexedAt = timestamp;
+  metadata.indexedAt = BigInt.fromI32(0);
 
   // Try to parse the JSON content
   let jsonResult = json.try_fromBytes(content);

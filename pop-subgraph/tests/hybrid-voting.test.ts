@@ -13,7 +13,6 @@ import {
   handleThresholdPctSet,
   handleQuorumSet,
   handleHatSet,
-  handleHatToggled,
   handleNewProposal,
   handleNewHatProposal,
   handleVoteCast,
@@ -27,7 +26,6 @@ import {
   createThresholdPctSetEvent,
   createQuorumSetEvent,
   createHatSetEvent,
-  createHatToggledEvent,
   createNewProposalEvent,
   createNewHatProposalEvent,
   createVoteCastEvent,
@@ -90,7 +88,7 @@ function setupHybridVotingContract(contractAddress: Address): void {
   hybridVoting.organization = orgId;
   hybridVoting.executor = Address.zero();
   hybridVoting.thresholdPct = 0;
-  hybridVoting.quorum = 0;
+  hybridVoting.quorum = BigInt.fromI32(0);
   hybridVoting.hats = Address.zero();
   hybridVoting.classVersion = BigInt.fromI32(0);
   hybridVoting.createdAt = BigInt.fromI32(1000);
@@ -102,7 +100,7 @@ function setupHybridVotingContract(contractAddress: Address): void {
   ddv.organization = orgId;
   ddv.executor = Address.zero();
   ddv.thresholdPct = 0;
-  ddv.quorum = 0;
+  ddv.quorum = BigInt.fromI32(0);
   ddv.hats = Address.zero();
   ddv.createdAt = BigInt.fromI32(1000);
   ddv.createdAtBlock = BigInt.fromI32(100);
@@ -727,65 +725,6 @@ describe("HybridVoting", () => {
       let event = createHatSetEvent(0, BigInt.fromI32(1), true);
       // Don't setup contract
       handleHatSet(event);
-
-      // Verify no entity was created
-      assert.entityCount("HatPermission", 0);
-    });
-  });
-
-  describe("HatToggled", () => {
-    test("Consolidated HatPermission created via toggle", () => {
-      let event = createHatToggledEvent(BigInt.fromI32(1), true);
-
-      // Setup contract first (handler requires HybridVotingContract to exist)
-      setupHybridVotingContract(event.address);
-
-      handleHatToggled(event);
-
-      // Verify consolidated HatPermission entity was created
-      assert.entityCount("HatPermission", 1);
-
-      let permissionId = event.address.toHexString() + "-1-Voter";
-      assert.fieldEquals(
-        "HatPermission",
-        permissionId,
-        "allowed",
-        "true"
-      );
-      assert.fieldEquals(
-        "HatPermission",
-        permissionId,
-        "contractType",
-        "HybridVoting"
-      );
-    });
-
-    test("HatPermission can be toggled", () => {
-      let event1 = createHatToggledEvent(BigInt.fromI32(1), true);
-
-      // Setup contract first (handler requires HybridVotingContract to exist)
-      setupHybridVotingContract(event1.address);
-
-      handleHatToggled(event1);
-
-      let event2 = createHatToggledEvent(BigInt.fromI32(1), false);
-      handleHatToggled(event2);
-
-      assert.entityCount("HatPermission", 1);
-
-      let permissionId = event1.address.toHexString() + "-1-Voter";
-      assert.fieldEquals(
-        "HatPermission",
-        permissionId,
-        "allowed",
-        "false"
-      );
-    });
-
-    test("HatToggled skips if contract doesn't exist", () => {
-      let event = createHatToggledEvent(BigInt.fromI32(1), true);
-      // Don't setup contract
-      handleHatToggled(event);
 
       // Verify no entity was created
       assert.entityCount("HatPermission", 0);

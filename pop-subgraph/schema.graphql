@@ -48,12 +48,18 @@ type Organization @entity(immutable: false) {
 
 type User @entity(immutable: false) {
   id: String! # orgId-userAddress
-  organization: Organization # Nullable - unlinked when user has no active roles
+  # Set on creation and never cleared — filter on membershipStatus to exclude members who have
+  # lost every role. (Nullable only because a User can exist before its org row is written.)
+  organization: Organization
   address: Bytes!
   account: Account # Link to global Account for username
 
   # Membership tracking
-  joinMethod: String # "QuickJoin", "HatClaim", "VouchingAutoMint", "ExecutorMint"
+  # How the user first appeared. Values actually written by the mappings:
+  # "QuickJoin", "QuickJoinWithPasskey", "HatClaim", "DeploymentMint", "ExecutorMint", and the
+  # "HatTransfer" placeholder used when a raw Hats transfer is seen before any join event
+  # (upgraded in place once the real join handler runs).
+  joinMethod: String
   currentHatIds: [BigInt!]! # Currently held hats
   membershipStatus: MembershipStatus! # Active/Inactive
   hatChanges: [UserHatChange!]! @derivedFrom(field: "user")
@@ -85,7 +91,6 @@ type User @entity(immutable: false) {
   vouchStates: [WearerVouchState!]! @derivedFrom(field: "wearerUser")
   hatsMintedEvents: [HatsMintedEvent!]! @derivedFrom(field: "recipientUser")
   vouchingRestrictions: [VouchingRestrictionEvent!]! @derivedFrom(field: "userUser")
-  hatAutoMints: [HatAutoMintEvent!]! @derivedFrom(field: "wearerUser")
   hatClaims: [HatClaimEvent!]! @derivedFrom(field: "wearerUser")
 
   # Aggregate statistics
@@ -117,14 +122,6 @@ type TaskManager @entity(immutable: false) {
   globalRolePermissions: [GlobalRolePermission!]! @derivedFrom(field: "taskManager")
   createdAt: BigInt!
   createdAtBlock: BigInt!
-  transactionHash: Bytes!
-}
-
-type BeaconUpgrade @entity(immutable: true) {
-  id: Bytes!
-  implementation: Bytes!
-  blockNumber: BigInt!
-  blockTimestamp: BigInt!
   transactionHash: Bytes!
 }
 
@@ -166,7 +163,7 @@ Project metadata fetched from IPFS.
 Contains project description.
 """
 type ProjectMetadata @entity(immutable: false) {
-  id: String! # IPFS CID (Qm...)
+  id: String! # projectId-CID (scoped by owning project — carries a `project` pointer)
   project: Project
   description: String # Project description from IPFS JSON
   indexedAt: BigInt
@@ -298,6 +295,7 @@ enum ContractType {
   EducationHub
   Executor
   ToggleModule
+  TaskManager
 }
 
 enum HatPermissionRole {
@@ -410,7 +408,8 @@ Task application content fetched from IPFS.
 Contains the applicant's notes and relevant experience.
 """
 type TaskApplicationMetadata @entity(immutable: true) {
-  id: String! # IPFS CID
+  id: String! # IPFS CID. No owner pointer, so the CID alone is a safe key and the file data
+            # source is spawned with NO context (see task-manager.ts).
   notes: String
   experience: String
   indexedAt: BigInt
@@ -476,7 +475,8 @@ type HybridVotingContract @entity(immutable: false) {
   organization: Organization! # Organization this HybridVotingContract belongs to
   executor: Bytes!
   thresholdPct: Int! # Minimum support percentage (0-100)
-  quorum: Int! # Minimum voter count
+  # uint32 on-chain; BigInt because GraphQL Int is 32-bit signed and .toI32() aborts above 2^31-1.
+  quorum: BigInt! # Minimum voter count
   hats: Bytes!
   createdAt: BigInt!
   createdAtBlock: BigInt!
@@ -559,7 +559,8 @@ type HybridVotingThresholdChange @entity(immutable: true) {
 type HybridVotingQuorumChange @entity(immutable: true) {
   id: Bytes! # txHash-logIndex
   hybridVoting: HybridVotingContract!
-  newQuorum: Int!
+  # uint32 on-chain; BigInt because GraphQL Int is 32-bit signed and .toI32() aborts above 2^31-1.
+  newQuorum: BigInt!
   changedAt: BigInt!
   changedAtBlock: BigInt!
   transactionHash: Bytes!
@@ -631,7 +632,8 @@ type DirectDemocracyVotingContract @entity(immutable: false) {
   organization: Organization! # Organization this DirectDemocracyVotingContract belongs to
   executor: Bytes!
   thresholdPct: Int! # Minimum support percentage (0-100)
-  quorum: Int! # Minimum voter count
+  # uint32 on-chain; BigInt because GraphQL Int is 32-bit signed and .toI32() aborts above 2^31-1.
+  quorum: BigInt! # Minimum voter count
   hats: Bytes!
   createdAt: BigInt!
   createdAtBlock: BigInt!
@@ -663,7 +665,8 @@ type DirectDemocracyVotingThresholdChange @entity(immutable: true) {
 type DirectDemocracyVotingQuorumChange @entity(immutable: true) {
   id: Bytes! # txHash-logIndex
   directDemocracyVoting: DirectDemocracyVotingContract!
-  newQuorum: Int!
+  # uint32 on-chain; BigInt because GraphQL Int is 32-bit signed and .toI32() aborts above 2^31-1.
+  newQuorum: BigInt!
   changedAt: BigInt!
   changedAtBlock: BigInt!
   transactionHash: Bytes!
@@ -736,7 +739,6 @@ type EligibilityModuleContract @entity(immutable: false) {
   vouches: [Vouch!]! @derivedFrom(field: "eligibilityModule")
   userJoinTimes: [UserJoinTime!]! @derivedFrom(field: "eligibilityModule")
   vouchingRestrictions: [VouchingRestrictionEvent!]! @derivedFrom(field: "eligibilityModule")
-  hatAutoMints: [HatAutoMintEvent!]! @derivedFrom(field: "eligibilityModule")
   hatClaims: [HatClaimEvent!]! @derivedFrom(field: "eligibilityModule")
   roleApplications: [RoleApplication!]! @derivedFrom(field: "eligibilityModule")
 }
@@ -864,7 +866,8 @@ type VouchConfig @entity(immutable: false) {
   eligibilityModule: EligibilityModuleContract!
   hat: Hat!
   hatId: BigInt!
-  quorum: Int!
+  # uint32 on-chain; BigInt because GraphQL Int is 32-bit signed and .toI32() aborts above 2^31-1.
+  quorum: BigInt!
   membershipHatId: BigInt!
   enabled: Boolean!
   combinesWithHierarchy: Boolean!
@@ -992,20 +995,6 @@ type VouchingRestrictionEvent @entity(immutable: true) {
   transactionHash: Bytes!
 }
 
-type HatAutoMintEvent @entity(immutable: true) {
-  id: Bytes! # txHash-logIndex
-  eligibilityModule: EligibilityModuleContract!
-  wearer: Bytes!
-  wearerUser: User
-  wearerUsername: String
-  hatId: BigInt!
-  hat: Hat
-  vouchCount: Int!
-  mintedAt: BigInt!
-  mintedAtBlock: BigInt!
-  transactionHash: Bytes!
-}
-
 type HatClaimEvent @entity(immutable: true) {
   id: Bytes! # txHash-logIndex
   eligibilityModule: EligibilityModuleContract!
@@ -1099,7 +1088,8 @@ Token request metadata fetched from IPFS.
 Contains the reason for the request and when it was submitted.
 """
 type TokenRequestMetadata @entity(immutable: true) {
-  id: String! # IPFS CID
+  id: String! # IPFS CID. No owner pointer, so the CID alone is a safe key and the file data
+            # source is spawned with NO context (see participation-token.ts).
   reason: String
   submittedAt: BigInt
   indexedAt: BigInt
@@ -1210,7 +1200,10 @@ Education module content fetched from IPFS.
 Contains description, external link, quiz questions, and answer options.
 """
 type EducationModuleMetadata @entity(immutable: true) {
-  id: String! # IPFS CID
+  # moduleEntityId-CID, i.e. educationHub-moduleId-Qm... Scoped by the owning module (not the bare
+  # CID) because this row carries a `module` pointer: two modules sharing one content CID must get
+  # two rows, and an immutable double-INSERT would halt indexing.
+  id: String!
   module: EducationModule
   description: String
   link: String # External resource URL
@@ -1406,7 +1399,10 @@ type DkimKey @entity(immutable: false) {
 
 # IPFS-indexed content of a single allowlist commit, keyed by its CIDv0.
 type ZkEmailAllowlist @entity(immutable: false) {
-  id: String! # IPFS CIDv0 of the allowlist JSON
+  # moduleAddress-CID. Scoped by the owning module (not the bare CID) because this row carries a
+  # `module` pointer and owns immutable entry children: allowlist JSON is standardised, so two
+  # modules sharing one CID is expected and must yield two rows.
+  id: String!
   module: ZkEmailInvites!
   # Merkle root declared inside the allowlist JSON (should match the on-chain commit).
   root: Bytes
@@ -1416,7 +1412,7 @@ type ZkEmailAllowlist @entity(immutable: false) {
 
 # A single allowlist entry: either a whole domain or a specific email mapped to role hat IDs.
 type ZkEmailAllowlistEntry @entity(immutable: true) {
-  id: String! # cid-index
+  id: String! # allowlistId-index, i.e. moduleAddress-CID-index
   allowlist: ZkEmailAllowlist!
   entryType: String! # "domain" or "email"
   # The human-readable identifier ("anthropic.com" for a domain, "alice@org.com" for an email).
@@ -1563,7 +1559,7 @@ type Account @entity(immutable: false) {
 }
 
 type AccountMetadata @entity(immutable: false) {
-  id: String! # IPFS CID
+  id: String! # accountAddress-CID (scoped by owning account — carries an `account` pointer)
   account: Account
   bio: String
   avatar: String # IPFS CID for avatar image
@@ -1647,7 +1643,10 @@ type CallerChange @entity(immutable: true) {
 }
 
 type BatchExecution @entity(immutable: true) {
-  id: Bytes! # txHash-logIndex
+  # txHash + executor + proposalId. Deliberately NOT logIndex-based: handleCallExecuted must be able
+  # to derive this same id, and it cannot know the BatchExecuted log index (targets emit their own
+  # logs between the CallExecuted events and the trailing BatchExecuted).
+  id: Bytes!
   executor: ExecutorContract!
   proposalId: BigInt!
   callCount: BigInt!
@@ -1771,7 +1770,11 @@ type HatPermission @entity(immutable: false) {
   role: Role # Link back to Role entity
   permissionRole: HatPermissionRole!
   allowed: Boolean!
-  hatType: Int # For HybridVoting/DDV (0=creator, 1+=voter classes)
+  # Raw on-chain HatType discriminant, and its meaning is per-contract:
+  #   HybridVoting          — enum HatType { CREATOR }        => 0 = creator
+  #   DirectDemocracyVoting — enum HatType { VOTING, CREATOR } => 0 = voter, 1 = creator
+  # Prefer permissionRole, which is already normalised across contracts.
+  hatType: Int
   setAt: BigInt!
   setAtBlock: BigInt!
   transactionHash: Bytes!
@@ -1876,6 +1879,12 @@ type PaymasterHubContract @entity(immutable: false) {
   poaManager: Bytes!
   totalDeposit: BigInt!
   solidarityBalance: BigInt!
+  # Block at which solidarityBalance was seeded from an absolute getSolidarityFund() read in
+  # handleInfrastructureDeployed. That read returns END-OF-BLOCK state, so it already includes every
+  # donation/fee logged in that block — and graph-node re-scans the block for the freshly created
+  # PaymasterHub template, re-delivering those same logs. The additive handlers skip anything at or
+  # before this block to avoid double-counting. Null when no backfill ran.
+  solidarityBackfilledAtBlock: BigInt
   totalFeesCollected: BigInt! # Cumulative solidarity fees collected from all orgs
   gracePeriodDays: Int!
   maxSpendDuringGrace: BigInt!
@@ -2090,9 +2099,12 @@ type PaymasterFeeCaps @entity(immutable: false) {
   orgConfig: PaymasterOrgConfig!
   maxFeePerGas: BigInt!
   maxPriorityFeePerGas: BigInt!
-  maxCallGas: Int!
-  maxVerificationGas: Int!
-  maxPreVerificationGas: Int!
+  # uint32 on-chain. Stored as BigInt, not Int: GraphQL Int is 32-bit SIGNED, so a cap above
+  # 2^31-1 (e.g. type(uint32).max as "unlimited") overflowed BigInt.toI32() and aborted the
+  # mapping, halting indexing.
+  maxCallGas: BigInt!
+  maxVerificationGas: BigInt!
+  maxPreVerificationGas: BigInt!
   setAt: BigInt!
   setAtBlock: BigInt!
   transactionHash: Bytes!
@@ -2257,7 +2269,10 @@ If IPFS is unavailable or slow, the main Organization entity will still be index
 with the metadataHash - this entity will be populated when/if IPFS content becomes available.
 """
 type OrgMetadata @entity(immutable: false) {
-  id: String! # IPFS hash (CID)
+  # orgId-CID. Scoped by the owning org (not the bare CID) because this row carries an
+  # `organization` pointer and owns immutable OrgMetadataLink children: two orgs sharing one
+  # metadata CID must get two rows, or the duplicate link INSERTs would halt indexing.
+  id: String!
   organization: Organization
   description: String
   template: String
@@ -2288,7 +2303,7 @@ type OrgMetadataLink @entity(immutable: true) {
 }
 
 type HatMetadata @entity(immutable: false) {
-  id: String! # IPFS hash (CID)
+  id: String! # hatEntityId-CID (scoped by owning hat, not the bare CID — carries a `hat` pointer)
   hat: Hat
   name: String # Role name fetched from IPFS JSON
   description: String # Fetched from IPFS JSON

@@ -398,9 +398,11 @@ export function handleFeeCapsSet(event: FeeCapsSetEvent): void {
 
   feeCaps.maxFeePerGas = event.params.maxFeePerGas;
   feeCaps.maxPriorityFeePerGas = event.params.maxPriorityFeePerGas;
-  feeCaps.maxCallGas = event.params.maxCallGas.toI32();
-  feeCaps.maxVerificationGas = event.params.maxVerificationGas.toI32();
-  feeCaps.maxPreVerificationGas = event.params.maxPreVerificationGas.toI32();
+  // uint32 on-chain. Stored raw: BigInt.toI32() aborts above 2^31-1, so setting a cap to
+  // type(uint32).max as "unlimited" used to halt indexing.
+  feeCaps.maxCallGas = event.params.maxCallGas;
+  feeCaps.maxVerificationGas = event.params.maxVerificationGas;
+  feeCaps.maxPreVerificationGas = event.params.maxPreVerificationGas;
   feeCaps.setAt = event.block.timestamp;
   feeCaps.setAtBlock = event.block.number;
   feeCaps.transactionHash = event.transaction.hash;
@@ -613,7 +615,13 @@ export function handleSolidarityFeeCollected(event: SolidarityFeeCollectedEvent)
 
   // Update hub
   let hub = getOrCreateHub(contractAddress);
-  hub.solidarityBalance = hub.solidarityBalance.plus(event.params.amount);
+  // Skip if this log is at or before the block whose end-of-block solidarity balance was already
+  // read absolutely in handleInfrastructureDeployed — applying it again would double-count.
+  let backfilledAt = hub.solidarityBackfilledAtBlock;
+  let alreadyCounted = backfilledAt !== null && event.block.number <= backfilledAt;
+  if (!alreadyCounted) {
+    hub.solidarityBalance = hub.solidarityBalance.plus(event.params.amount);
+  }
   hub.totalFeesCollected = hub.totalFeesCollected.plus(event.params.amount);
   hub.save();
 
@@ -643,7 +651,13 @@ export function handleSolidarityDonationReceived(event: SolidarityDonationReceiv
 
   // Update hub
   let hub = getOrCreateHub(contractAddress);
-  hub.solidarityBalance = hub.solidarityBalance.plus(event.params.amount);
+  // Skip if this log is at or before the block whose end-of-block solidarity balance was already
+  // read absolutely in handleInfrastructureDeployed — applying it again would double-count.
+  let backfilledAt = hub.solidarityBackfilledAtBlock;
+  let alreadyCounted = backfilledAt !== null && event.block.number <= backfilledAt;
+  if (!alreadyCounted) {
+    hub.solidarityBalance = hub.solidarityBalance.plus(event.params.amount);
+  }
   hub.save();
 
   // Create solidarity event record

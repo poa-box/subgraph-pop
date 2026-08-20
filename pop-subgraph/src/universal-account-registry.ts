@@ -117,19 +117,21 @@ export function handleUsernameChanged(event: UsernameChangedEvent): void {
   let userAddress = event.params.user;
   let newUsername = event.params.newUsername;
 
-  // Load account
+  // `username` is String! and the generated getter THROWS on a missing value, so the previous
+  // username may only be read on the branch where the account already existed.
+  let oldUsername: string | null = null;
   let account = Account.load(userAddress);
   if (!account) {
-    // Account should exist, but create if not found
+    // Account should exist, but create if not found; there is no prior username to record.
     account = new Account(userAddress);
     account.registry = contractAddress;
     account.user = userAddress;
     account.isDeleted = false;
     account.registeredAt = event.block.timestamp;
     account.registeredAtBlock = event.block.number;
+  } else {
+    oldUsername = account.username;
   }
-
-  let oldUsername = account.username;
 
   account.username = newUsername;
   account.lastUpdatedAt = event.block.timestamp;
@@ -244,6 +246,15 @@ export function handlePasskeyFactoryUpdated(event: PasskeyFactoryUpdatedEvent): 
   }
 }
 
+/**
+ * AccountMetadata entity id, scoped by the owning account (the row carries an `account` pointer, so
+ * two accounts with identical profile JSON would otherwise cross-link). Must match
+ * account-metadata.ts.
+ */
+export function accountMetadataId(userAddress: Bytes, ipfsCid: string): string {
+  return userAddress.toHexString() + "-" + ipfsCid;
+}
+
 export function handleProfileMetadataUpdated(event: ProfileMetadataUpdatedEvent): void {
   let userAddress = event.params.user;
   let metadataHash = event.params.metadataHash;
@@ -269,12 +280,12 @@ export function handleProfileMetadataUpdated(event: ProfileMetadataUpdatedEvent)
   // Convert bytes32 sha256 digest to IPFS CIDv0
   let ipfsCid = bytes32ToCid(metadataHash);
 
-  // Link Account to AccountMetadata
-  account.metadata = ipfsCid;
+  // Link Account to AccountMetadata. Account-scoped id, not the bare CID — see accountMetadataId.
+  account.metadata = accountMetadataId(userAddress, ipfsCid);
   account.save();
 
-  // Skip creating IPFS data source if metadata already indexed
-  let existingMeta = AccountMetadata.load(ipfsCid);
+  // Same-region safety net only; cross-block dedup is graph-node's (template, CID, context) key.
+  let existingMeta = AccountMetadata.load(accountMetadataId(userAddress, ipfsCid));
   if (existingMeta == null) {
     let context = new DataSourceContext();
     context.setBytes("userAddress", userAddress);

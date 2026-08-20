@@ -5,8 +5,8 @@
   "scripts": {
     "codegen": "graph codegen",
     "build": "graph build",
-    "build:base": "graph build --network base",
-    "deploy:base": "graph deploy --network base --node https://api.studio.thegraph.com/deploy/ peer-cashoutrelay-base",
+    "build:base": "cp subgraph.yaml .subgraph.yaml.orig && graph build --network base; s=$?; mv -f .subgraph.yaml.orig subgraph.yaml; exit $s",
+    "deploy:base": "cp subgraph.yaml .subgraph.yaml.orig && graph deploy --network base --node https://api.studio.thegraph.com/deploy/ peer-cashoutrelay-base; s=$?; mv -f .subgraph.yaml.orig subgraph.yaml; exit $s",
     "create-local": "graph create --node http://localhost:8020/ peer-cashoutrelay-base",
     "remove-local": "graph remove --node http://localhost:8020/ peer-cashoutrelay-base",
     "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 peer-cashoutrelay-base",

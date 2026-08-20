@@ -37,7 +37,6 @@ import {
   WearerVouchesClearedEvent as WearerVouchesClearedEventEntity,
   UserJoinTime,
   VouchingRestrictionEvent,
-  HatAutoMintEvent,
   HatClaimEvent,
   HatMetadataUpdateEvent,
   RoleApplication
@@ -88,6 +87,10 @@ function bytes32ToCid(hash: Bytes): string {
  * The contract stores bytes32 which is the sha256 digest from the IPFS CID.
  * We convert it back to CIDv0 format for The Graph to fetch.
  */
+export function hatMetadataId(hatEntityId: string, ipfsCid: string): string {
+  return hatEntityId + "-" + ipfsCid;
+}
+
 function createHatIpfsDataSource(metadataCID: Bytes, hatEntityId: string): void {
   // Skip if metadataCID is empty (all zeros)
   if (metadataCID.equals(Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000"))) {
@@ -97,8 +100,8 @@ function createHatIpfsDataSource(metadataCID: Bytes, hatEntityId: string): void 
   // Convert bytes32 sha256 digest to IPFS CIDv0 string
   let ipfsCid = bytes32ToCid(metadataCID);
 
-  // Skip if HatMetadata already exists - prevents duplicate file data sources
-  let existing = HatMetadata.load(ipfsCid);
+  // Same-region safety net only; cross-block dedup is graph-node's (template, CID, context) key.
+  let existing = HatMetadata.load(hatMetadataId(hatEntityId, ipfsCid));
   if (existing != null) {
     return;
   }
@@ -138,10 +141,16 @@ export function handleHatCreatedWithEligibility(
 
   hat.hatId = hatId;
   hat.parentHatId = event.params.parentHatId;
-  // Calculate level based on parent (0 for top hat, otherwise try to get from parent)
+  // Provisional level from the parent entity; overwritten below with the authoritative depth from
+  // Hats.viewHat() when that call succeeds. The guess is wrong by construction for any hat whose
+  // parent this subgraph never indexed (genesis / HatsTreeSetup hats are created via Hats.createHat
+  // directly), which is why the on-chain value is preferred.
   let parentHat = Hat.load(contractAddress.toHexString() + "-" + event.params.parentHatId.toString());
   if (parentHat != null) {
     hat.level = parentHat.level + 1;
+    // Populate the hierarchy link so Hat.childHats resolves. No extra store read — the parent is
+    // already in hand for the level calculation.
+    hat.parentHat = parentHat.id;
   } else {
     // Default to 1 if parent not found (parent might not be indexed yet)
     hat.level = event.params.parentHatId.equals(BigInt.fromI32(0)) ? 0 : 1;
@@ -154,6 +163,21 @@ export function handleHatCreatedWithEligibility(
   // During deployment, hats are often created by helper contracts (HatsTreeSetup, etc.)
   // which are not real users. The creator address is still stored in hat.creator.
   let eligibilityModule = EligibilityModuleContract.load(contractAddress);
+
+  // Link an EXISTING member so User.hatsCreated resolves (it returned [] for everyone because this
+  // field was never written). loadExistingUser preserves the rule above: it returns null for a
+  // deployment helper or any address that never joined, so no phantom user is created.
+  if (eligibilityModule) {
+    let creatorUser = loadExistingUser(
+      eligibilityModule.organization,
+      event.params.creator,
+      event.block.timestamp,
+      event.block.number
+    );
+    if (creatorUser) {
+      hat.creatorUser = creatorUser.id;
+    }
+  }
 
   hat.defaultEligible = event.params.defaultEligible;
   hat.defaultStanding = event.params.defaultStanding;
@@ -190,6 +214,11 @@ export function handleHatCreatedWithEligibility(
       if (imageURI.length > 0) {
         roleImage = imageURI;
       }
+      // The call is already paid for, and viewHat returns the authoritative tree depth and status.
+      // Prefer them over the parent-entity guess above (which is wrong for hats whose parent this
+      // subgraph never indexed) and over the `active = true` default. Zero extra RPC cost.
+      hat.level = viewResult.value.getLevel();
+      hat.active = viewResult.value.getActive();
     }
   }
 
@@ -683,7 +712,8 @@ export function handleVouchConfigSet(event: VouchConfigSetEvent): void {
   // configureVouching / batchConfigureVouching / resetVouches each bump the on-chain epoch
   // exactly once per emitted VouchConfigSet.
   vouchConfig.epoch = vouchConfig.epoch.plus(BigInt.fromI32(1));
-  vouchConfig.quorum = i32(event.params.quorum.toI32());
+  // quorum is uint32 on-chain; stored raw as BigInt because .toI32() aborts above 2^31-1.
+  vouchConfig.quorum = event.params.quorum;
   vouchConfig.membershipHatId = event.params.membershipHatId;
   vouchConfig.enabled = event.params.enabled;
   vouchConfig.combinesWithHierarchy = event.params.combineWithHierarchy;
@@ -1118,10 +1148,11 @@ export function handleHatMetadataUpdated(
   hat.metadataUpdatedAt = event.block.timestamp;
   hat.metadataUpdatedAtBlock = event.block.number;
 
-  // Link to IPFS metadata entity (will be populated when IPFS content is fetched)
+  // Link to IPFS metadata entity (populated when IPFS content is fetched). Hat-scoped id, not the
+  // bare CID — see hatMetadataId.
   let metadataCID = event.params.metadataCID;
   if (!metadataCID.equals(Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000"))) {
-    hat.metadata = bytes32ToCid(metadataCID);
+    hat.metadata = hatMetadataId(hatEntityId, bytes32ToCid(metadataCID));
   }
 
   hat.save();

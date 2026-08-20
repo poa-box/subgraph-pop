@@ -1,5 +1,5 @@
 // Utility functions for subgraph event handlers
-import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, ethereum, log } from "@graphprotocol/graph-ts";
 import {
   Account,
   User,
@@ -38,7 +38,9 @@ export function getUsernameForAddress(address: Address): string | null {
  *
  * Returns null for system contracts (Executor, EligibilityModule).
  *
- * @param joinMethod - How the user joined: "QuickJoin" | "QuickJoinWithPasskey" | "HatClaim"
+ * @param joinMethod - How the user joined. One of: "QuickJoin" | "QuickJoinWithPasskey" |
+ *   "HatClaim" | "DeploymentMint" | "ExecutorMint". (applyHatTransferAdd separately writes the
+ *   "HatTransfer" placeholder, which this function upgrades — see below.)
  */
 export function createUserOnJoin(
   orgId: Bytes,
@@ -73,6 +75,14 @@ export function createUserOnJoin(
     user.firstSeenAtBlock = blockNumber;
     user.currentHatIds = [];
     user.membershipStatus = "Active";
+    user.joinMethod = joinMethod;
+  } else if (
+    user.joinMethod == "HatTransfer" &&
+    user.firstSeenAtBlock.equals(blockNumber)
+  ) {
+    // Placeholder from applyHatTransferAdd, which runs earlier in the SAME block (the Hats
+    // TransferSingle precedes the module's join event). Scoped to that block so a genuine
+    // historical HatTransfer origin is not rewritten when the member later rejoins.
     user.joinMethod = joinMethod;
   }
 
@@ -137,8 +147,11 @@ export function getOrCreateUser(
 }
 
 /**
- * Create a consolidated HatPermission entity
- * Used by: HybridVoting, DirectDemocracyVoting, ParticipationToken, QuickJoin, EducationHub
+ * Create a consolidated HatPermission entity.
+ * Used by: HybridVoting, DirectDemocracyVoting, ParticipationToken, QuickJoin, EducationHub.
+ *
+ * hatType is optional, but AssemblyScript has no nullable value types — hence the explicit
+ * setHatType flag (same idiom as getOrCreateRole) rather than `i32 | null`, which is not valid AS.
  */
 export function createHatPermission(
   contractAddress: Address,
@@ -147,7 +160,8 @@ export function createHatPermission(
   hatId: BigInt,
   permissionRole: string,
   allowed: boolean,
-  hatType: i32 | null,
+  hatType: i32,
+  setHatType: boolean,
   event: ethereum.Event
 ): HatPermission {
   let id =
@@ -171,7 +185,7 @@ export function createHatPermission(
   permission.role = role.id;
 
   permission.allowed = allowed;
-  if (hatType !== null) {
+  if (setHatType) {
     permission.hatType = hatType;
   }
   permission.setAt = event.block.timestamp;
@@ -302,14 +316,57 @@ export function createPauseEvent(
 }
 
 /**
- * Record a hat change for a user and update their currentHatIds
+ * Record a hat change for a user and update their currentHatIds.
+ *
+ * Returns null on a no-op (hat already held, or removing one not held). The Hats TransferSingle
+ * from mintHat is processed before the module's own join event in the same tx, so applyHatTransferAdd
+ * has already logged the grant — writing unconditionally duplicated the row on every join.
  */
 export function recordUserHatChange(
   user: User,
   hatId: BigInt,
   added: boolean,
   event: ethereum.Event
-): UserHatChange {
+): UserHatChange | null {
+  let currentHats = user.currentHatIds;
+
+  let alreadyHeld = false;
+  for (let i = 0; i < currentHats.length; i++) {
+    if (currentHats[i].equals(hatId)) {
+      alreadyHeld = true;
+      break;
+    }
+  }
+
+  // Nothing actually changed — do not write a history row.
+  if (added == alreadyHeld) {
+    return null;
+  }
+
+  if (added) {
+    currentHats.push(hatId);
+    user.currentHatIds = currentHats;
+
+    // Reactivate a user who had previously lost all their hats.
+    if (user.membershipStatus == "Inactive") {
+      user.membershipStatus = "Active";
+    }
+  } else {
+    let newHats: BigInt[] = [];
+    for (let i = 0; i < currentHats.length; i++) {
+      if (!currentHats[i].equals(hatId)) {
+        newHats.push(currentHats[i]);
+      }
+    }
+    user.currentHatIds = newHats;
+
+    // Deliberately does NOT clear user.organization: it is the only User -> Organization link, so
+    // nulling it dropped the member from every org-derived relation. Filter on membershipStatus.
+    if (newHats.length == 0) {
+      user.membershipStatus = "Inactive";
+    }
+  }
+
   // Include user.id AND hatId in the ID to ensure uniqueness when:
   // - Bulk events update multiple users (same hatId, different users)
   // - Single user receives multiple hats (same user, different hatIds)
@@ -326,63 +383,8 @@ export function recordUserHatChange(
   hatChange.transactionHash = event.transaction.hash;
   hatChange.save();
 
-  // Update user's currentHatIds
-  let currentHats = user.currentHatIds;
-  if (added) {
-    // Add hat if not already present
-    let found = false;
-    for (let i = 0; i < currentHats.length; i++) {
-      if (currentHats[i].equals(hatId)) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      currentHats.push(hatId);
-      user.currentHatIds = currentHats;
-
-      // Reactivate user if they were inactive and relink to org
-      if (user.membershipStatus == "Inactive") {
-        user.membershipStatus = "Active";
-        // Restore organization link - extract orgId from user.id (format: orgId-userAddress)
-        let parts = user.id.split("-");
-        if (parts.length >= 1) {
-          let orgId = Bytes.fromHexString(parts[0]);
-          user.organization = orgId;
-        }
-      }
-    }
-  } else {
-    // Remove hat if present
-    let newHats: BigInt[] = [];
-    for (let i = 0; i < currentHats.length; i++) {
-      if (!currentHats[i].equals(hatId)) {
-        newHats.push(currentHats[i]);
-      }
-    }
-    user.currentHatIds = newHats;
-
-    // If user has no more active hats, mark inactive and unlink from org
-    if (newHats.length == 0) {
-      user.membershipStatus = "Inactive";
-      user.organization = null;
-    }
-  }
-
   user.save();
   return hatChange;
-}
-
-/**
- * Get the organization ID from a contract address by loading the related entity
- * and traversing to the organization
- */
-export function getOrgIdFromContract(contractAddress: Address): Bytes | null {
-  let org = Organization.load(contractAddress);
-  if (org) {
-    return org.id;
-  }
-  return null;
 }
 
 /**
@@ -448,9 +450,14 @@ export function getOrCreateRole(
     lookup.role = roleId;
     lookup.save();
   } else if (lookup.role != roleId) {
-    // Hat was previously seen under a different org's lookup — that should
-    // not happen since hat IDs are globally unique. Log via no-op (subgraph
-    // mappings can't `throw`); prefer existing entry.
+    // Hat IDs are globally unique, so a hat resurfacing under a different org's lookup means the
+    // two orgs disagree about the tree. Keep the existing entry (first writer wins) but surface it
+    // — this was previously an empty branch, so the condition was computed and silently discarded.
+    log.warning("HatLookup {} already maps to role {}, refusing to repoint to {}", [
+      lookupId,
+      lookup.role,
+      roleId
+    ]);
   }
 
   return role as Role;
@@ -584,7 +591,7 @@ export function applyHatTransferAdd(
  *
  * Removes hatId from User.currentHatIds and marks the corresponding RoleWearer
  * inactive. If the user holds no other hats afterward, they are marked Inactive
- * and unlinked from the org (matching the prior recordUserHatChange behavior).
+ * (but stay linked to the org — see recordUserHatChange).
  *
  * Idempotent: removing an already-absent hat is a no-op.
  */
@@ -612,9 +619,10 @@ export function applyHatTransferRemove(
     }
     if (removed) {
       user.currentHatIds = newHats;
+      // Marks the user inactive but deliberately keeps user.organization set — see
+      // recordUserHatChange for why clearing it silently destroyed org membership history.
       if (newHats.length == 0) {
         user.membershipStatus = "Inactive";
-        user.organization = null;
       }
       recordHatChangeLog(user, hatId, false, event);
       user.save();

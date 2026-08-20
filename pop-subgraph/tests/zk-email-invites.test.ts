@@ -123,7 +123,7 @@ describe("ZkEmailInvites", () => {
 
       assert.fieldEquals("ZkEmailInvites", MODULE, "activeRoot", root.toHexString());
       assert.fieldEquals("ZkEmailInvites", MODULE, "activeAllowlistCid", expectedCid);
-      assert.fieldEquals("ZkEmailInvites", MODULE, "activeAllowlist", expectedCid);
+      assert.fieldEquals("ZkEmailInvites", MODULE, "activeAllowlist", MODULE + "-" + expectedCid);
     });
 
     test("clears the active allowlist (dormant) for a zero CID", () => {

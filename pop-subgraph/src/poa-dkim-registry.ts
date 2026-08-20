@@ -128,7 +128,7 @@ export function handleDkimOwnershipTransferred(event: OwnershipTransferredEvent)
  * Ensure a DkimRegistry row exists so ZkEmailInvites.dkimRegistry can be a real reference.
  *
  * A module can point at a registry this subgraph has not yet seen an event from — on a chain
- * where the registry is not configured at all (arbitrum-one stubs it to the zero address), or
+ * where the registry is not configured at all, or
  * simply before its first KeyHashSet. Creating the row keeps the reference resolvable, and lets
  * a client distinguish "registry not indexed here" from "domain not seeded".
  */

@@ -159,12 +159,12 @@ describe("OrgRegistry", () => {
         "metadataHash",
         "0x0000000000000000000000000000000000000000000000000000000000001234"
       );
-      // Verify metadata link is set to the CIDv0 format of the hash (to match OrgMetadata entity ID)
+      // Verify metadata link is set to the org-scoped OrgMetadata entity ID (orgId-CID)
       assert.fieldEquals(
         "Organization",
         orgId.toHexString(),
         "metadata",
-        bytes32ToCid(metadataHash)
+        orgId.toHexString() + "-" + bytes32ToCid(metadataHash)
       );
     });
 
@@ -186,7 +186,7 @@ describe("OrgRegistry", () => {
         "Organization",
         orgId.toHexString(),
         "metadata",
-        bytes32ToCid(metadataHash)
+        orgId.toHexString() + "-" + bytes32ToCid(metadataHash)
       );
     });
 
@@ -301,7 +301,7 @@ describe("OrgRegistry", () => {
         "Organization",
         orgId.toHexString(),
         "metadata",
-        bytes32ToCid(newMetadataHash)
+        orgId.toHexString() + "-" + bytes32ToCid(newMetadataHash)
       );
 
       // Verify history record was created
@@ -325,7 +325,7 @@ describe("OrgRegistry", () => {
         "Organization",
         orgId.toHexString(),
         "metadata",
-        bytes32ToCid(initialHash)
+        orgId.toHexString() + "-" + bytes32ToCid(initialHash)
       );
 
       // Update to new metadata
@@ -340,7 +340,7 @@ describe("OrgRegistry", () => {
         "Organization",
         orgId.toHexString(),
         "metadata",
-        bytes32ToCid(newHash)
+        orgId.toHexString() + "-" + bytes32ToCid(newHash)
       );
     });
 

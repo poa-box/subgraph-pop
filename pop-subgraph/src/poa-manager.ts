@@ -194,6 +194,15 @@ export function handleInfrastructureDeployed(event: InfrastructureDeployedEvent)
   let fundResult = paymasterContract.try_getSolidarityFund();
   if (!fundResult.reverted) {
     hub.solidarityBalance = fundResult.value.balance;
+    // Watermark this absolute read so the additive handlers ignore same-block logs they would
+    // otherwise re-apply on top of it (the read is end-of-block state; the template re-scans the
+    // block). See handleSolidarityDonationReceived / handleSolidarityFeeCollected.
+    hub.solidarityBackfilledAtBlock = event.block.number;
+    // getSolidarityFund() also returns distributionPaused, and this handler exists precisely to
+    // catch up on state set before the template existed — so take it here instead of leaving the
+    // `false` default above to be corrected only by a later SolidarityDistributionPaused event
+    // that may never come. Zero extra RPC cost.
+    hub.solidarityDistributionPaused = fundResult.value.distributionPaused;
   }
 
   // Read grace period config (also set before template existed)

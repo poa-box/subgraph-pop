@@ -1,5 +1,5 @@
 import { Bytes, dataSource, json, BigInt, JSONValueKind, ByteArray } from "@graphprotocol/graph-ts";
-import { ZkEmailAllowlist, ZkEmailAllowlistEntry, ZkEmailInvites } from "../generated/schema";
+import { ZkEmailAllowlist, ZkEmailAllowlistEntry } from "../generated/schema";
 
 /**
  * Handler for the IPFS file data source that parses a ZkEmailInvites allowlist JSON.
@@ -17,9 +17,12 @@ import { ZkEmailAllowlist, ZkEmailAllowlistEntry, ZkEmailInvites } from "../gene
  * }
  *
  * Mirrors org-metadata.ts: resilient to malformed data (the subgraph never bricks if IPFS is slow
- * or the JSON is bad — on-chain ZkEmailInvites indexing continues), dedupes on the CID because the
- * ZkEmailAllowlistEntry children are immutable, and links the parsed content back to the module via
- * the DataSourceContext "module" key set in zk-email-invites.ts.
+ * or the JSON is bad — on-chain ZkEmailInvites indexing continues), and scopes every id by the
+ * module from the DataSourceContext "module" key set in zk-email-invites.ts, so that two modules
+ * committing the same allowlist CID cannot collide on the immutable entry children.
+ *
+ * Does NOT back-link ZkEmailInvites.activeAllowlist — a file data source cannot see chain-written
+ * entities. handleActiveAllowlistSet sets that pointer directly.
  */
 export function handleZkEmailAllowlist(content: Bytes): void {
   // dataSource.stringParam() is the IPFS CIDv0 (this entity's id).
@@ -29,15 +32,18 @@ export function handleZkEmailAllowlist(content: Bytes): void {
   let context = dataSource.context();
   let moduleAddress = context.getBytes("module");
 
-  // Immutable children — if this CID was already indexed, do nothing (avoids INSERT conflicts).
-  let existing = ZkEmailAllowlist.load(cid);
+  // Module-scoped id, matching zkEmailAllowlistId() in zk-email-invites.ts and the context key
+  // above — not the bare CID, since two modules can commit the same allowlist JSON.
+  let entityId = moduleAddress.toHexString() + "-" + cid;
+
+  // Immutable children — if this (module, CID) was already indexed, do nothing.
+  let existing = ZkEmailAllowlist.load(entityId);
   if (existing != null) {
-    linkActive(moduleAddress, cid);
     return;
   }
 
-  // Create the allowlist entity up front so the back-link survives even if JSON parsing fails.
-  let allowlist = new ZkEmailAllowlist(cid);
+  // Create the allowlist entity up front so it survives even if JSON parsing fails.
+  let allowlist = new ZkEmailAllowlist(entityId);
   allowlist.module = moduleAddress;
   // File data sources have no block context; use 0 as a placeholder (same as org-metadata.ts).
   allowlist.indexedAt = BigInt.fromI32(0);
@@ -45,14 +51,12 @@ export function handleZkEmailAllowlist(content: Bytes): void {
   let jsonResult = json.try_fromBytes(content);
   if (jsonResult.isError) {
     allowlist.save();
-    linkActive(moduleAddress, cid);
     return;
   }
 
   let jsonValue = jsonResult.value;
   if (jsonValue.isNull() || jsonValue.kind != JSONValueKind.OBJECT) {
     allowlist.save();
-    linkActive(moduleAddress, cid);
     return;
   }
 
@@ -68,9 +72,8 @@ export function handleZkEmailAllowlist(content: Bytes): void {
   }
 
   allowlist.save();
-  linkActive(moduleAddress, cid);
 
-  // Parse entries[] — each becomes an immutable ZkEmailAllowlistEntry keyed by "cid-index".
+  // Parse entries[] — each becomes an immutable ZkEmailAllowlistEntry keyed "allowlistId-index".
   let entriesValue = obj.get("entries");
   if (entriesValue == null || entriesValue.isNull() || entriesValue.kind != JSONValueKind.ARRAY) {
     return;
@@ -84,8 +87,8 @@ export function handleZkEmailAllowlist(content: Bytes): void {
     }
     let entryObj = entryValue.toObject();
 
-    let entry = new ZkEmailAllowlistEntry(cid + "-" + i.toString());
-    entry.allowlist = cid;
+    let entry = new ZkEmailAllowlistEntry(entityId + "-" + i.toString());
+    entry.allowlist = entityId;
     entry.index = i;
 
     // type — "domain" or "email"; default to "domain" if absent so the field stays non-null.
@@ -148,26 +151,6 @@ export function handleZkEmailAllowlist(content: Bytes): void {
     entry.roleIndexes = roleIndexes;
 
     entry.save();
-  }
-}
-
-/**
- * Back-link the module's activeAllowlist pointer to this CID, but only if it is still the active one
- * (a newer ActiveAllowlistSet may have superseded it before the IPFS file landed).
- */
-function linkActive(moduleAddress: Bytes, cid: string): void {
-  let module = ZkEmailInvites.load(moduleAddress);
-  if (module == null) {
-    return;
-  }
-  let activeCid = module.activeAllowlistCid;
-  if (activeCid === null) {
-    return;
-  }
-  let activeCidStr: string = activeCid;
-  if (activeCidStr == cid) {
-    module.activeAllowlist = cid;
-    module.save();
   }
 }
 

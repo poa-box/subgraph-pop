@@ -19,17 +19,21 @@ export function handleEducationModuleMetadata(content: Bytes): void {
   let ipfsCid = dataSource.stringParam();
   let context = dataSource.context();
   let moduleEntityId = context.getString("moduleEntityId");
-  let timestamp = context.getBigInt("timestamp");
 
-  // Immutable - skip if already exists
-  let existing = EducationModuleMetadata.load(ipfsCid);
+  // The id is module-scoped, matching educationModuleMetadataId() in education-hub.ts and the
+  // context key above — this row carries a `module` pointer, so a bare-CID id could only ever
+  // point at one of the modules sharing that CID (and, being immutable, the second insert would
+  // halt indexing). File data sources have no block context, so indexedAt is fixed at 0.
+  let entityId = moduleEntityId + "-" + ipfsCid;
+
+  let existing = EducationModuleMetadata.load(entityId);
   if (existing != null) {
     return;
   }
 
-  let metadata = new EducationModuleMetadata(ipfsCid);
+  let metadata = new EducationModuleMetadata(entityId);
   metadata.module = moduleEntityId;
-  metadata.indexedAt = timestamp;
+  metadata.indexedAt = BigInt.fromI32(0);
 
   // Try to parse the JSON content
   let jsonResult = json.try_fromBytes(content);

@@ -195,8 +195,8 @@ dataSources:
     network: arbitrum-one
     source:
       abi: PoaDKIMRegistry
-      address: "0x0000000000000000000000000000000000000000"
-      startBlock: 447059849
+      address: "0xC2ddbc0A6fc4410eFE78904Bee48558eAd0dE112"
+      startBlock: 489000759
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -490,6 +490,8 @@ templates:
           handler: handleTaskClaimExpired
         - event: TaskUnclaimed(indexed uint256,indexed address,indexed address)
           handler: handleTaskUnclaimed
+        - event: ExecutorUpdated(address)
+          handler: handleExecutorUpdated
       file: ./src/task-manager.ts
   - kind: ethereum
     name: HybridVoting
@@ -524,8 +526,6 @@ templates:
           handler: handleQuorumSet
         - event: HatSet(uint8,uint256,bool)
           handler: handleHatSet
-        - event: HatToggled(indexed uint256,bool)
-          handler: handleHatToggled
         - event: NewProposal(uint256,bytes,bytes32,uint8,uint64,uint64)
           handler: handleNewProposal
         - event: NewHatProposal(uint256,bytes,bytes32,uint8,uint64,uint64,uint256[])
@@ -576,8 +576,6 @@ templates:
           handler: handleQuorumSet
         - event: HatSet(uint8,uint256,bool)
           handler: handleHatSet
-        - event: HatToggled(indexed uint256,bool)
-          handler: handleHatToggled
         - event: CreatorHatSet(uint256,bool)
           handler: handleCreatorHatSet
         - event: TargetAllowed(address,bool)
@@ -614,7 +612,6 @@ templates:
         - WearerVouchesClearedEvent
         - UserJoinTime
         - VouchingRestrictionEvent
-        - HatAutoMintEvent
         - HatClaimEvent
         - HatMetadataUpdateEvent
         - RoleApplication
@@ -798,8 +795,6 @@ templates:
           handler: handleCreatorHatSet
         - event: MemberHatSet(indexed uint256,bool)
           handler: handleMemberHatSet
-        - event: HatToggled(indexed uint256,bool)
-          handler: handleHatToggled
         - event: ExecutorSet(indexed address)
           handler: handleExecutorSet
         - event: TokenSet(indexed address)
@@ -813,7 +808,7 @@ templates:
       file: ./src/education-hub.ts
   - kind: ethereum
     name: ZkEmailInvites
-    network: gnosis
+    network: arbitrum-one
     source:
       abi: ZkEmailInvites
     mapping:
@@ -1200,7 +1195,7 @@ templates:
           file: ./abis/EducationHub.json
   - kind: file/ipfs
     name: ZkEmailAllowlist
-    network: gnosis
+    network: arbitrum-one
     mapping:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
