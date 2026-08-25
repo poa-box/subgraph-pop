@@ -2920,6 +2920,12 @@ type Subject @entity(immutable: false) {
   memberCount: Int!
   # accepted && eligible, recomputed by the fold mirror — the number the UI should render.
   activeMemberCount: Int!
+  # The accepted members' addresses. Kept explicitly (bounded by memberCount) so a SUBJECT-LEVEL
+  # config change — default flip, vouch (re)configure, vouch epoch reset — can RE-FOLD every
+  # accepted row in-mapping. This is the §5 "event-lag window": the contract does not re-evaluate
+  # members on those writes (a later reconcile() repairs them), but the subgraph must, or the app
+  # would render stale members until someone pays for the repair.
+  acceptedUsers: [Bytes!]!
   defaultAllow: Boolean!
   # subjectId >= 2^224 => adopted legacy Hats id (continuity); otherwise a v2-native id whose
   # bits 64..223 embed the owning authority address.
