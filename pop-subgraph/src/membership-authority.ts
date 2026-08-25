@@ -246,6 +246,26 @@ function getOrCreateMembership(
   return membership;
 }
 
+/**
+ * The membership row a (subject, user)-scoped CONFIG event should fold — or null for a GROUP.
+ *
+ * A group has no acceptance and no rule/email arm of its own: _memberOfGroup derives group
+ * membership purely from the member ROLES, so a Ban or an email attestation written against a group
+ * is inert on chain. Creating a folded row for it would publish an `eligible` verdict the contract
+ * never consults (and refold()'s own contract is "no row is ever folded against a group").
+ */
+function membershipForRow(
+  authority: MembershipAuthorityContract,
+  subject: Subject,
+  user: Bytes,
+  event: ethereum.Event
+): SubjectMembership | null {
+  if (subject.kind == "Group") {
+    return null;
+  }
+  return getOrCreateMembership(authority, subject, user, event);
+}
+
 /** Link the row to its User entity if that wallet has actually joined the org. */
 function linkMembershipUser(membership: SubjectMembership, event: ethereum.Event): void {
   let user = loadExistingUser(
@@ -698,30 +718,40 @@ export function handleRuleSet(event: RuleSetEvent): void {
     return;
   }
   let subject = getOrCreateSubject(authority, event.params.subjectId, event);
-  let membership = getOrCreateMembership(authority, subject, event.params.user, event);
+  // setRule accepts a GROUP subject (only an exists check), but _memberOfGroup ignores a group's
+  // own rule/email state entirely — group membership is derived from the member ROLES. So the rule
+  // row is recorded (the slot really exists on chain) while NO membership row is created or folded
+  // for it: a folded group row would contradict the derived semantics consumers are told to use.
+  let membership = membershipForRow(authority, subject, event.params.user, event);
 
   let kind = ruleKindName(event.params.kind);
   let author = event.params.author == 1 ? "Delegated" : "Governance";
   let delegable = event.params.delegable;
 
-  let id = membership.id;
+  let id = membershipEntityId(subject.subjectId, event.params.user);
   let rule = AccessRule.load(id);
   if (rule == null) {
     rule = new AccessRule(id);
     rule.subject = subject.id;
     rule.authority = authority.id;
     rule.organization = authority.organization;
-    rule.membership = membership.id;
     rule.user = event.params.user;
     rule.setAt = event.block.timestamp;
     rule.setAtBlock = event.block.number;
   }
+  if (membership === null) {
+    rule.membership = null;
+  } else {
+    rule.membership = membership.id;
+  }
   rule.kind = kind;
   rule.author = author;
   rule.delegable = delegable;
-  // STICKY has exactly one meaning: a governance rule with delegable = false. It survives renounce
-  // and no delegate may clear or overwrite it.
-  rule.sticky = author == "Governance" && !delegable;
+  // STICKY has exactly one meaning: a governance GRANT authored by governance with delegable=false.
+  // It survives renounce and no delegate may clear or overwrite it. setRule(RuleKind.None) deletes
+  // the slot on chain but still emits RuleSet(kind=0, author=0, delegable=false) — computing sticky
+  // from author/delegable alone badged that empty slot as a live sticky rule.
+  rule.sticky = kind == "Grant" && author == "Governance" && !delegable;
   rule.clearedAt = null;
   // Best-effort provenance: RuleSet carries no managerSubject, and a manager resolved through a
   // CONTAINING GROUP is not event-visible, so only the subject's own delegation is attributable.
@@ -735,11 +765,13 @@ export function handleRuleSet(event: RuleSetEvent): void {
   rule.transactionHash = event.transaction.hash;
   rule.save();
 
-  membership.rule = rule.id;
-  membership.ruleKind = kind;
-  linkMembershipUser(membership, event);
-  membership.save();
-  refold(subject, membership, event);
+  if (membership !== null) {
+    membership.rule = rule.id;
+    membership.ruleKind = kind;
+    linkMembershipUser(membership, event);
+    membership.save();
+    refold(subject, membership, event);
+  }
 }
 
 /**
@@ -765,9 +797,9 @@ export function handleRuleCleared(event: RuleClearedEvent): void {
     return;
   }
   let subject = getOrCreateSubject(authority, event.params.subjectId, event);
-  let membership = getOrCreateMembership(authority, subject, event.params.user, event);
+  let membership = membershipForRow(authority, subject, event.params.user, event);
 
-  let rule = AccessRule.load(membership.id);
+  let rule = AccessRule.load(membershipEntityId(subject.subjectId, event.params.user));
   if (rule != null) {
     rule.kind = "None";
     rule.delegable = false;
@@ -778,9 +810,11 @@ export function handleRuleCleared(event: RuleClearedEvent): void {
     rule.transactionHash = event.transaction.hash;
     rule.save();
   }
-  membership.ruleKind = "None";
-  membership.save();
-  refold(subject, membership, event);
+  if (membership !== null) {
+    membership.ruleKind = "None";
+    membership.save();
+    refold(subject, membership, event);
+  }
 }
 
 /*═══════════════════════════════ lifecycle feed ═══════════════════════════════*/
@@ -1226,6 +1260,12 @@ export function handleVouchEpochReset(event: VouchEpochResetEvent): void {
  * UserVouchesCleared — governance strands ONE wearer's vouches permanently (the contract bumps a
  * per-user generation). Mirrored by parking the row's epoch at the uint64 SENTINEL, which can never
  * equal a real subject epoch.
+ *
+ * The per-voucher RECORDS are swept too. The generation bump strands them exactly as an epoch reset
+ * strands a tally — but with the record's own `epoch` still matching the config, so unlike the
+ * epoch-reset case a consumer CANNOT detect the staleness by comparison. Left alone they render as
+ * live vouchers whose revokeVouch reverts HasNotVouched. The list is bounded by the wearer's
+ * voucher count (a handful).
  */
 export function handleUserVouchesCleared(event: UserVouchesClearedEvent): void {
   let authority = loadAuthority(event.address);
@@ -1238,6 +1278,18 @@ export function handleUserVouchesCleared(event: UserVouchesClearedEvent): void {
   membership.vouchEpoch = vouchEpochSentinel();
   membership.vouchMet = false;
   membership.save();
+
+  let records = membership.vouches.load();
+  for (let i = 0; i < records.length; i++) {
+    let record = records[i];
+    if (!record.active) {
+      continue;
+    }
+    record.active = false;
+    record.revokedAt = event.block.timestamp;
+    record.save();
+  }
+
   refold(subject, membership, event);
 }
 
@@ -1259,18 +1311,24 @@ export function handleEmailVerifiedSet(event: EmailVerifiedSetEvent): void {
     return;
   }
   let subject = getOrCreateSubject(authority, event.params.subjectId, event);
-  let membership = getOrCreateMembership(authority, subject, event.params.user, event);
+  // setEmailVerified checks nothing about the subject, so a GROUP id can be attested — and is inert
+  // on chain (the email arm is only read for ROLE subjects). Record the attestation, fold nothing.
+  let membership = membershipForRow(authority, subject, event.params.user, event);
 
-  let id = membership.id;
+  let id = membershipEntityId(subject.subjectId, event.params.user);
   let verification = EmailVerification.load(id);
   if (verification == null) {
     verification = new EmailVerification(id);
     verification.subject = subject.id;
     verification.authority = authority.id;
     verification.organization = authority.organization;
-    verification.membership = membership.id;
     verification.user = event.params.user;
     verification.verifiedAt = event.block.timestamp;
+  }
+  if (membership === null) {
+    verification.membership = null;
+  } else {
+    verification.membership = membership.id;
   }
   verification.verified = event.params.verified;
   if (event.params.verified) {
@@ -1280,9 +1338,11 @@ export function handleEmailVerifiedSet(event: EmailVerifiedSetEvent): void {
   verification.transactionHash = event.transaction.hash;
   verification.save();
 
-  membership.emailVerified = event.params.verified;
-  membership.save();
-  refold(subject, membership, event);
+  if (membership !== null) {
+    membership.emailVerified = event.params.verified;
+    membership.save();
+    refold(subject, membership, event);
+  }
 }
 
 /*═══════════════════════════════ permission table ═══════════════════════════════*/

@@ -601,6 +601,51 @@ describe("MembershipAuthority — THE FOLD MIRROR (one test per arm)", () => {
     assert.fieldEquals("AccessRule", membershipId(memberHatId(), BOB), "sticky", "false");
   });
 
+  test("setRule(None) is NOT sticky — the emitted rule is an empty slot, not a governance grant", () => {
+    // setRule(subject, user, RuleKind.None, false) deletes the slot on chain but still emits
+    // RuleSet(kind=0, author=Governance, delegable=false).
+    handleRuleSet(
+      createRuleSetEvent(authority(), memberHatId(), Address.fromString(ALICE), 0, 0, false)
+    );
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("AccessRule", id, "kind", "None");
+    assert.fieldEquals("AccessRule", id, "sticky", "false");
+    assert.fieldEquals("SubjectMembership", id, "eligible", "false");
+  });
+
+  test("a BAN on a GROUP records the rule but folds NO membership row (the chain ignores it)", () => {
+    let groupId = nativeSubjectId(7);
+    createGroupSubject(groupId, "Council");
+    handleRuleSet(
+      createRuleSetEvent(authority(), groupId, Address.fromString(ALICE), 2, 0, false)
+    );
+    let id = groupId.toString() + "-" + ALICE;
+    // The slot exists on chain, so the row is kept for auditability...
+    assert.fieldEquals("AccessRule", id, "kind", "Ban");
+    // ...but no eligibility verdict is published against a group: _memberOfGroup never reads it.
+    assert.notInStore("SubjectMembership", id);
+
+    // The same for the email attestor arm, which checks nothing about the subject at all.
+    handleEmailVerifiedSet(
+      createEmailVerifiedSetEvent(authority(), groupId, Address.fromString(BOB), true)
+    );
+    assert.fieldEquals("EmailVerification", groupId.toString() + "-" + BOB, "verified", "true");
+    assert.notInStore("SubjectMembership", groupId.toString() + "-" + BOB);
+  });
+
+  test("clearing a GROUP rule stays row-only too", () => {
+    let groupId = nativeSubjectId(8);
+    createGroupSubject(groupId, "Council");
+    handleRuleSet(
+      createRuleSetEvent(authority(), groupId, Address.fromString(ALICE), 2, 0, false)
+    );
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), groupId, Address.fromString(ALICE))
+    );
+    assert.fieldEquals("AccessRule", groupId.toString() + "-" + ALICE, "kind", "None");
+    assert.notInStore("SubjectMembership", groupId.toString() + "-" + ALICE);
+  });
+
   test("RuleCleared records clearedAt and drops the row to kind None", () => {
     banRule(memberHatId(), ALICE);
     handleRuleCleared(
@@ -861,6 +906,56 @@ describe("MembershipAuthority — the §5 event-lag window (config-level refolds
       memberHatId().toString() + "-" + ALICE + "-" + BOB,
       "active",
       "false"
+    );
+  });
+
+  test("UserVouchesCleared sweeps the wearer's per-voucher records inactive", () => {
+    // The contract bumps a per-USER generation, stranding every record permanently — and the
+    // record's own epoch still matches the config, so nothing else can reveal the staleness.
+    handleVouchConfigured(
+      createVouchConfiguredEvent(authority(), memberHatId(), 2, execHatId())
+    );
+    handleVouched(
+      createVouchedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(ALICE),
+        Address.fromString(BOB)
+      )
+    );
+    handleVoucherSeeded(
+      createVoucherSeededEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(ALICE),
+        Address.fromString(CAROL)
+      )
+    );
+    let bobRecord = memberHatId().toString() + "-" + ALICE + "-" + BOB;
+    let carolRecord = memberHatId().toString() + "-" + ALICE + "-" + CAROL;
+    assert.fieldEquals("SubjectVouchRecord", bobRecord, "active", "true");
+    assert.fieldEquals("SubjectVouchRecord", carolRecord, "active", "true");
+
+    handleUserVouchesCleared(
+      createUserVouchesClearedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+
+    assert.fieldEquals("SubjectVouchRecord", bobRecord, "active", "false");
+    assert.fieldEquals("SubjectVouchRecord", carolRecord, "active", "false");
+    // Another wearer's records are untouched — the clear is per (subject, user).
+    handleVouched(
+      createVouchedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(MANAGER),
+        Address.fromString(BOB)
+      )
+    );
+    assert.fieldEquals(
+      "SubjectVouchRecord",
+      memberHatId().toString() + "-" + MANAGER + "-" + BOB,
+      "active",
+      "true"
     );
   });
 

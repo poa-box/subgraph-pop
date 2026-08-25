@@ -20,7 +20,7 @@ removes or renames an existing entity.
 | `MembershipAuthorityContract` | proxy address | The per-org authority. `Organization.membershipAuthority` points at it. |
 | `Subject` | **the subject id VERBATIM** (decimal string) | A ROLE or a GROUP. Adopted legacy hatIds keep their value, so the id equals the `HatLookup` key. |
 | `SubjectMembership` | `subjectId-user` | The (subject, user) row: `accepted`, `acceptedAt`, and the **fold mirror** (`eligible`, `eligibilitySource`, `isMember`, `claimable`). Created lazily for eligible-but-not-accepted users too. |
-| `AccessRule` | `subjectId-user` | The single rule slot: `kind` (None/Grant/Ban), `author`, `delegable`, `sticky`. |
+| `AccessRule` | `subjectId-user` | The single rule slot: `kind` (None/Grant/Ban), `author`, `delegable`, `sticky`. `membership` is null for a GROUP subject (the chain never consults a group's own rule). |
 | `SubjectVouchConfig` | `subjectId` | quorum + voucher subject + epoch. Named `Subject…` because the legacy `VouchConfig` entity still serves unmigrated orgs. |
 | `SubjectVouchRecord` | `subjectId-user-voucher` | Records-first per-voucher rows (`active`, `seeded`, `epoch`). |
 | `EmailVerification` | `subjectId-user` | The zk-email attestor arm. |
@@ -46,6 +46,12 @@ A migrated org adopts its legacy hatIds verbatim as subject ids. The mapping the
   `applyHatTransferAdd` / `applyHatTransferRemove` helpers the canonical Hats dataSource uses, so
   `RoleWearer` (`orgId-hatId-wearer`), `User` and `UserHatChange` ids never change across the
   cutover.
+
+**A group's own rule / email rows are inert.** `setRule` accepts a GROUP subject and
+`setEmailVerified` checks nothing about the subject, but `_memberOfGroup` ignores both — group
+membership is derived from the member ROLES. The mapping records the `AccessRule` / `EmailVerification`
+row (the slot exists on chain) with a NULL `membership` link, and creates no `SubjectMembership` row
+and no fold for it: publishing an `eligible` verdict there would contradict the derived semantics.
 
 **Groups are not tokens.** A GROUP subject gets no `Role` mirror (surfacing one would pollute every
 role picker — the v1 marker-hat mistake) and no `RoleWearer` rows. Group membership is a DERIVATION:
@@ -251,9 +257,9 @@ Two build gotchas worth knowing:
 
 ## 6. Tests
 
-`yarn test` — 420 total (333 pre-existing + 87 new):
+`yarn test` — 424 total (333 pre-existing + 91 new):
 
-* `tests/membership-authority.test.ts` (71) — per-handler coverage, one test per FOLD ARM plus the
+* `tests/membership-authority.test.ts` (75) — per-handler coverage, one test per FOLD ARM plus the
   precedence ordering, the accepted mirror (paused-seed flag, idempotent mints, unported burn,
   RoleWearer/User/HatLookup continuity), the §5 event-lag-window refolds, and the RULE-DELETION
   EVENT-LAW replays: one test per contract path that deletes a rule slot (renounce delegable vs

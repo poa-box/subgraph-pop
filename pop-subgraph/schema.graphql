@@ -3022,7 +3022,9 @@ type AccessRule @entity(immutable: false) {
   subject: Subject!
   authority: MembershipAuthorityContract!
   organization: Organization!
-  membership: SubjectMembership!
+  # Null for a GROUP subject: setRule accepts one, but the contract never consults a group's own
+  # rule (group membership is derived from the member ROLES), so no membership row is folded for it.
+  membership: SubjectMembership
   user: Bytes!
   kind: RuleKind!
   author: RuleAuthor!
@@ -3061,8 +3063,10 @@ type SubjectVouchConfig @entity(immutable: false) {
 }
 
 # Per-VOUCHER record — the records-first model the seed ports verbatim (a legacy voucher can
-# revokeVouch and cannot double-vouch). `active` flips false on VouchRevoked; a record is also
-# dead when `epoch` is stale relative to the config epoch or the wearer's vouches were cleared.
+# revokeVouch and cannot double-vouch). `active` flips false on VouchRevoked and on
+# UserVouchesCleared (governance's per-user generation bump strands every record, undetectably from
+# the record's own epoch, so the sweep is what makes it visible); a record is also dead when `epoch`
+# is stale relative to the config epoch.
 type SubjectVouchRecord @entity(immutable: false) {
   id: String! # subjectId-userAddress-voucherAddress
   membership: SubjectMembership!
@@ -3078,6 +3082,7 @@ type SubjectVouchRecord @entity(immutable: false) {
   epoch: BigInt! # the config epoch the record was written at
   vouchedAt: BigInt!
   vouchedAtBlock: BigInt!
+  # When the record stopped counting: the voucher's own revokeVouch, or governance's clearUserVouches.
   revokedAt: BigInt
   transactionHash: Bytes!
 }
@@ -3088,7 +3093,8 @@ type EmailVerification @entity(immutable: false) {
   subject: Subject!
   authority: MembershipAuthorityContract!
   organization: Organization!
-  membership: SubjectMembership!
+  # Null for a GROUP subject — see AccessRule.membership.
+  membership: SubjectMembership
   user: Bytes!
   verified: Boolean!
   verifiedAt: BigInt!
