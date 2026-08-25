@@ -75,6 +75,7 @@ The subgraph reads 27 ABIs and writes ~157 entity types into a single GraphQL sc
 - **Email-based invites.** `ZkEmailInvites`, `ZkEmailClaim`, `ZkEmailRegisteredEmail`, `ZkEmailAllowlist`, plus `DkimRegistry`/`DkimKey` for the DKIM keys those proofs verify against.
 - **Protocol upgrades.** `Beacon`, `BeaconUpgrade`, `ImplementationRegistryContract`, `ImplementationType`, `ImplementationVersion` — which implementation each org's proxies point at, and when it changed.
 - **Cross-chain plumbing.** `PoaManagerHubContract`, `SatelliteRegistration`, and the cross-chain dispatch/receive event entities for hub-and-spoke deployment.
+- **Access v2 (`MembershipAuthority`).** The per-org authority that supersedes `EligibilityModule` + `ToggleModule` for migrated orgs: `Subject` (roles and groups), `SubjectMembership` (with the eligibility **fold mirror**, so membership needs no `eth_call`), `AccessRule`, `SubjectVouchConfig`/`SubjectVouchRecord`, `PermRow`, `PendingAction`, and the `AuthorityRouter` bindings that mark each org's cutover. See [`pop-subgraph/docs/WAVE-E-ACCESS-V2.md`](pop-subgraph/docs/WAVE-E-ACCESS-V2.md).
 
 The full schema is in [`pop-subgraph/schema.graphql`](pop-subgraph/schema.graphql).
 
