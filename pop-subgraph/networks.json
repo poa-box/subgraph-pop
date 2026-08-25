@@ -27,6 +27,10 @@
     "PoaDKIMRegistry": {
       "address": "0xC2ddbc0A6fc4410eFE78904Bee48558eAd0dE112",
       "startBlock": 489000759
+    },
+    "AuthorityRouter": {
+      "address": "0x9591d1e139dcFBe0BA12D6477b85D1035a2417F1",
+      "startBlock": 489000759
     }
   },
   "gnosis": {
@@ -56,6 +60,10 @@
     },
     "PoaDKIMRegistry": {
       "address": "0xC2ddbc0A6fc4410eFE78904Bee48558eAd0dE112",
+      "startBlock": 47420018
+    },
+    "AuthorityRouter": {
+      "address": "0x9591d1e139dcFBe0BA12D6477b85D1035a2417F1",
       "startBlock": 47420018
     }
   }

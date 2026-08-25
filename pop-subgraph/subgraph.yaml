@@ -215,6 +215,44 @@ dataSources:
         - event: OwnershipTransferred(indexed address,indexed address)
           handler: handleDkimOwnershipTransferred
       file: ./src/poa-dkim-registry.ts
+  # ACCESS V2 — AuthorityRouter is a per-chain PROTOCOL SINGLETON (one instance, not a per-org
+  # module), so it is a static dataSource rather than a template. Its address is CREATE3-derived
+  # from (typeName="AuthorityRouterProxy", version="v1") through the DeterministicDeployer at
+  # 0x4aC8B5ebEb9D8C3dE3180ddF381D552d59e8835a, so it is IDENTICAL on gnosis and arbitrum-one:
+  # 0x9591d1e139dcFBe0BA12D6477b85D1035a2417F1 (address-only derivation, independent of initcode).
+  #
+  # STARTBLOCK IS A PLACEHOLDER: the singleton is deployed by the Access-v2 step-0 protocol wave,
+  # which has NOT broadcast yet. The values in networks.json are the newest known infra blocks per
+  # chain (always <= the router deploy block, so nothing is missed — only a slightly longer scan).
+  # TIGHTEN THEM TO THE ACTUAL DEPLOY BLOCK before the publish gate (see docs/WAVE-E-ACCESS-V2.md).
+  - kind: ethereum
+    name: AuthorityRouter
+    network: arbitrum-one
+    source:
+      abi: AuthorityRouter
+      address: "0x9591d1e139dcFBe0BA12D6477b85D1035a2417F1"
+      startBlock: 489000759
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - AuthorityRouterContract
+        - RouterBinding
+        - MembershipAuthorityContract
+      abis:
+        - name: AuthorityRouter
+          file: ./abis/AuthorityRouter.json
+      eventHandlers:
+        - event: RouterInitialized(indexed address,indexed address,indexed address)
+          handler: handleRouterInitialized
+        - event: PaymasterHubSet(indexed address)
+          handler: handleRouterPaymasterHubSet
+        - event: AuthorityBound(indexed bytes32,indexed uint256,indexed address)
+          handler: handleAuthorityBound
+        - event: AuthorityUnbound(indexed bytes32,indexed uint256,indexed address)
+          handler: handleAuthorityUnbound
+      file: ./src/authority-router.ts
 templates:
   - kind: ethereum
     name: OrgDeployer
@@ -849,6 +887,119 @@ templates:
         - event: UniversalFactoryUpdated(indexed address)
           handler: handleUniversalFactoryUpdated
       file: ./src/zk-email-invites.ts
+  # ACCESS V2 — the per-org MembershipAuthority. Created from OrgRegistry.ContractRegistered with
+  # typeId keccak256("MembershipAuthority") (org-registry.ts), exactly like ZkEmailInvites: the
+  # module is not carried by OrgDeployed, so ContractRegistered is the ONLY wiring point.
+  #
+  # The proxy is PREDEPLOYED + atomically initialized one or more blocks earlier, so
+  # MembershipAuthorityInitialized/PausedSet from that tx are cross-block-EARLIER than this
+  # template and never index — org-registry.ts DERIVES that config (executor from the Organization,
+  # paused = true from the born-paused invariant). Every SUBJECT/seed event is emitted in the
+  # governance batch that registers the proxy or later, i.e. same-tx-or-after, so it indexes.
+  # The handlers below make ZERO eth_calls.
+  - kind: ethereum
+    name: MembershipAuthority
+    network: arbitrum-one
+    source:
+      abi: MembershipAuthority
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - MembershipAuthorityContract
+        - Subject
+        - SubjectMembership
+        - SubjectMembershipEvent
+        - AccessRule
+        - SubjectVouchConfig
+        - SubjectVouchRecord
+        - EmailVerification
+        - PermRow
+        - GroupComposition
+        - ManagerConfig
+        - PendingAction
+        - ConfigLintEvent
+        - Role
+        - RoleWearer
+        - HatLookup
+        - User
+        - UserHatChange
+      abis:
+        - name: MembershipAuthority
+          file: ./abis/MembershipAuthority.json
+      eventHandlers:
+        - event: MembershipAuthorityInitialized(indexed address,indexed bytes32,bool)
+          handler: handleMembershipAuthorityInitialized
+        - event: PausedSet(bool)
+          handler: handleAuthorityPausedSet
+        - event: SubjectCreated(indexed uint256,uint8,string,bytes32,uint32)
+          handler: handleSubjectCreated
+        - event: SubjectRenamed(indexed uint256,string,bytes32,string)
+          handler: handleSubjectRenamed
+        - event: SubjectDefaultSet(indexed uint256,bool)
+          handler: handleSubjectDefaultSet
+        - event: MaxMembersSet(indexed uint256,uint32)
+          handler: handleMaxMembersSet
+        - event: GroupCompositionChanged(indexed uint256,indexed uint256,bool)
+          handler: handleGroupCompositionChanged
+        - event: ManagerConfigSet(indexed uint256,indexed uint256,uint8,uint32)
+          handler: handleManagerConfigSet
+        - event: RuleSet(indexed uint256,indexed address,uint8,uint8,bool)
+          handler: handleRuleSet
+        - event: RuleCleared(indexed uint256,indexed address)
+          handler: handleRuleCleared
+        - event: RoleOffered(indexed uint256,indexed address,address,bool)
+          handler: handleRoleOffered
+        - event: OfferWithdrawn(indexed uint256,indexed address,address)
+          handler: handleOfferWithdrawn
+        - event: RoleGranted(indexed uint256,indexed address,address,bool)
+          handler: handleRoleGranted
+        - event: RoleClaimed(indexed uint256,indexed address)
+          handler: handleRoleClaimed
+        - event: RoleRemoved(indexed uint256,indexed address,bool,address,bool)
+          handler: handleRoleRemoved
+        - event: RoleRenounced(indexed uint256,indexed address)
+          handler: handleRoleRenounced
+        - event: MembershipReconciled(indexed uint256,indexed address)
+          handler: handleMembershipReconciled
+        - event: PendingActionCreated(indexed uint256,indexed uint256,indexed
+            address,uint8,address,uint64)
+          handler: handlePendingActionCreated
+        - event: PendingActionCancelled(indexed uint256,indexed address)
+          handler: handlePendingActionCancelled
+        - event: PendingActionVoided(indexed uint256)
+          handler: handlePendingActionVoided
+        - event: PendingActionFinalized(indexed uint256)
+          handler: handlePendingActionFinalized
+        - event: VouchConfigured(indexed uint256,uint32,indexed uint256)
+          handler: handleVouchConfigured
+        - event: Vouched(indexed uint256,indexed address,indexed address)
+          handler: handleVouched
+        - event: VouchRevoked(indexed uint256,indexed address,indexed address)
+          handler: handleVouchRevoked
+        - event: VouchSeeded(indexed uint256,indexed address,uint32)
+          handler: handleVouchSeeded
+        - event: VoucherSeeded(indexed uint256,indexed address,indexed address)
+          handler: handleVoucherSeeded
+        - event: VouchEpochReset(indexed uint256,uint64)
+          handler: handleVouchEpochReset
+        - event: UserVouchesCleared(indexed uint256,indexed address)
+          handler: handleUserVouchesCleared
+        - event: MaxDailyVouchesSet(uint32)
+          handler: handleMaxDailyVouchesSet
+        - event: EmailVerifiedSet(indexed uint256,indexed address,bool)
+          handler: handleEmailVerifiedSet
+        - event: PermSet(indexed uint256,indexed bytes32,indexed bytes32,uint256)
+          handler: handlePermSet
+        - event: PermCleared(indexed uint256,indexed bytes32,indexed bytes32)
+          handler: handlePermCleared
+        - event: ConfigLint(indexed uint256,uint8)
+          handler: handleConfigLint
+        - event: TransferSingle(indexed address,indexed address,indexed
+            address,uint256,uint256)
+          handler: handleAuthorityTransferSingle
+      file: ./src/membership-authority.ts
   - kind: ethereum
     name: PaymentManager
     network: arbitrum-one
