@@ -253,6 +253,23 @@ function linkMembershipUser(membership: SubjectMembership, event: ethereum.Event
   }
 }
 
+
+/**
+ * Adjust the authority's accepted-membership counter through a FRESH load. The counter is touched
+ * from the same handler that may have just created a subject (which also writes the authority), so
+ * reusing a stale in-memory copy would clobber that write.
+ */
+function bumpAcceptedMembershipCount(address: Address, delta: i32, timestamp: BigInt): void {
+  let authority = MembershipAuthorityContract.load(address);
+  if (authority == null) {
+    return;
+  }
+  let next = authority.acceptedMembershipCount + delta;
+  authority.acceptedMembershipCount = next > 0 ? next : 0;
+  authority.lastUpdatedAt = timestamp;
+  authority.save();
+}
+
 /*═══════════════════════════════ THE FOLD MIRROR ═══════════════════════════════*/
 
 /**
@@ -1414,9 +1431,7 @@ export function handleAuthorityTransferSingle(event: TransferSingleEvent): void 
       subject.lastUpdatedAt = event.block.timestamp;
       subject.save();
 
-      authority.acceptedMembershipCount = authority.acceptedMembershipCount + 1;
-      authority.lastUpdatedAt = event.block.timestamp;
-      authority.save();
+      bumpAcceptedMembershipCount(event.address, 1, event.block.timestamp);
     }
     refold(subject, membership, event);
     // CONTINUITY: same helper, same entity ids as the static Hats dataSource.
@@ -1438,10 +1453,7 @@ export function handleAuthorityTransferSingle(event: TransferSingleEvent): void 
     subject.lastUpdatedAt = event.block.timestamp;
     subject.save();
 
-    authority.acceptedMembershipCount =
-      authority.acceptedMembershipCount > 0 ? authority.acceptedMembershipCount - 1 : 0;
-    authority.lastUpdatedAt = event.block.timestamp;
-    authority.save();
+    bumpAcceptedMembershipCount(event.address, -1, event.block.timestamp);
   }
   refold(subject, membership, event);
   applyHatTransferRemove(orgId, Address.fromBytes(wearer), subjectId, event);
