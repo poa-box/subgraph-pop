@@ -56,11 +56,14 @@ import {
   handlePendingActionFinalized,
   handleAuthorityTransferSingle
 } from "../src/membership-authority";
-import { handleAuthorityBound } from "../src/authority-router";
+import { handleAuthorityBound, handleAuthorityUnbound } from "../src/authority-router";
 import { handleContractRegistered } from "../src/org-registry";
-import { handleHatsTransferSingle } from "../src/hats";
+import { handleHatsTransferSingle, handleHatsStatusChanged } from "../src/hats";
 import { createContractRegisteredEvent } from "./org-registry-utils";
-import { createTransferSingleEvent as createHatsTransferSingleEvent } from "./hats-utils";
+import {
+  createTransferSingleEvent as createHatsTransferSingleEvent,
+  createHatStatusChangedEvent
+} from "./hats-utils";
 import {
   resetLogIndex,
   createSubjectCreatedEvent,
@@ -82,8 +85,11 @@ import {
   createPendingActionFinalizedEvent,
   createTransferSingleEvent
 } from "./membership-authority-utils";
-import { createAuthorityBoundEvent } from "./authority-router-utils";
-import { Organization } from "../generated/schema";
+import {
+  createAuthorityBoundEvent,
+  createAuthorityUnboundEvent
+} from "./authority-router-utils";
+import { Hat, HatLookup, Organization } from "../generated/schema";
 
 const MEMBERSHIP_AUTHORITY_TYPE_ID = "0xdff254c0d9c318c4e70eac95af4c0c9189e13f9d51ae2cfe2c1c446c4775ddb8";
 
@@ -580,5 +586,199 @@ describe("Access v2 — the migration ceremony end to end", () => {
     assert.fieldEquals("SubjectMembership", alice, "eligibilitySource", "SubjectDefault");
     // Her Executive seat is untouched: a delegate can never reach a sticky officer grant.
     assert.fieldEquals("SubjectMembership", membershipId(execHatId(), ALICE), "isMember", "true");
+  });
+});
+
+/*
+ * POST-CUTOVER OVERLAP — the static Hats dataSource and the authority template write the SAME
+ * RoleWearer / User / Hat rows for ADOPTED ids. The legacy tokens are never burned at cutover
+ * (rollback depends on it) and the toggle-off is ToggleModule-local, so a direct legacy interaction
+ * remains possible forever; the guard in hats.ts must hand those ids over to the authority — and
+ * hand them BACK before the bind and after an unbind.
+ */
+describe("Access v2 — post-cutover overlap with the canonical Hats dataSource", () => {
+  test("BEFORE the bind the legacy source still owns the id (seed window: legacy Hats is the truth)", () => {
+    runSeedCeremony(); // subjects exist, but no AuthorityBound yet
+
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(MALLORY),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    let wearerId = ORG_ID + "-" + memberHatId().toString() + "-" + MALLORY;
+    assert.fieldEquals("RoleWearer", wearerId, "isActive", "true");
+
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(MALLORY),
+        Address.fromString(MALLORY),
+        Address.fromString(ZERO_ADDRESS),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    assert.fieldEquals("RoleWearer", wearerId, "isActive", "false");
+  });
+
+  test("a post-cutover legacy renounceHat can no longer deactivate an authority-held member", () => {
+    runSeedCeremony();
+    runCutover(false);
+
+    let aliceWearerId = ORG_ID + "-" + memberHatId().toString() + "-" + ALICE;
+    assert.fieldEquals("RoleWearer", aliceWearerId, "isActive", "true");
+
+    // Alice calls Hats.renounceHat(adoptedId) directly — Hats burns the legacy token and emits.
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(ALICE),
+        Address.fromString(ALICE),
+        Address.fromString(ZERO_ADDRESS),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+
+    // The authority saw nothing, so the two continuous families must not disagree.
+    assert.fieldEquals("RoleWearer", aliceWearerId, "isActive", "true");
+    assert.fieldEquals("SubjectMembership", membershipId(memberHatId(), ALICE), "isMember", "true");
+  });
+
+  test("a post-cutover legacy MINT creates no phantom wearer for an adopted id", () => {
+    runSeedCeremony();
+    runCutover(false);
+
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(MALLORY),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    // MALLORY is BANNED on the authority: a legacy mint must not resurrect her as a wearer.
+    assert.notInStore("RoleWearer", ORG_ID + "-" + memberHatId().toString() + "-" + MALLORY);
+    assert.fieldEquals(
+      "SubjectMembership",
+      membershipId(memberHatId(), MALLORY),
+      "isMember",
+      "false"
+    );
+  });
+
+  test("a checkHatStatus poke after the cutover cannot flip Hat.active under the wearers", () => {
+    runSeedCeremony();
+
+    // The legacy Hat entity as the EligibilityModule wrote it, linked through HatLookup.
+    let hat = new Hat(EXECUTOR + "-" + memberHatId().toString());
+    hat.hatId = memberHatId();
+    hat.parentHatId = topHatId();
+    hat.level = 1;
+    hat.eligibilityModule = Address.fromString(EXECUTOR);
+    hat.creator = Address.fromString(EXECUTOR);
+    hat.defaultEligible = true;
+    hat.defaultStanding = true;
+    hat.mintedCount = BigInt.fromI32(1);
+    hat.active = true;
+    hat.createdAt = BigInt.fromI32(1000);
+    hat.createdAtBlock = BigInt.fromI32(100);
+    hat.transactionHash = Bytes.fromHexString(ZERO_HASH);
+    hat.save();
+    let lookup = HatLookup.load(memberHatId().toString())!;
+    lookup.hat = hat.id;
+    lookup.save();
+
+    // Pre-cutover the poke is real news and must land.
+    handleHatsStatusChanged(
+      createHatStatusChangedEvent(Address.fromString(HATS), memberHatId(), false)
+    );
+    assert.fieldEquals("Hat", hat.id, "active", "false");
+    hat.active = true;
+    hat.save();
+
+    runCutover(false);
+
+    // Post-cutover the toggle-off is EXPECTED and permissionlessly pokeable; applying it would make
+    // every migrated wearer read as not-wearing under the "AND with Hat.active" convention.
+    handleHatsStatusChanged(
+      createHatStatusChangedEvent(Address.fromString(HATS), memberHatId(), false)
+    );
+    assert.fieldEquals("Hat", hat.id, "active", "true");
+  });
+
+  test("an UNBIND rollback hands the id back to the legacy source", () => {
+    runSeedCeremony();
+    runCutover(false);
+
+    handleAuthorityUnbound(
+      createAuthorityUnboundEvent(
+        Address.fromString(ROUTER),
+        orgId(),
+        BigInt.fromI32(TOPHAT_DOMAIN),
+        authority()
+      )
+    );
+
+    let aliceWearerId = ORG_ID + "-" + memberHatId().toString() + "-" + ALICE;
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(ALICE),
+        Address.fromString(ALICE),
+        Address.fromString(ZERO_ADDRESS),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    assert.fieldEquals("RoleWearer", aliceWearerId, "isActive", "false");
+  });
+
+  test("a NON-adopted hat of the same org is untouched by the guard", () => {
+    runSeedCeremony();
+    runCutover(false);
+
+    // A hat that exists in the org's Hats tree but was never seeded as a subject: no Subject row,
+    // so the legacy source stays its only writer.
+    let strayHatId = topHatId().plus(BigInt.fromI32(2).pow(208).times(BigInt.fromI32(7)));
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(DAVE),
+        strayHatId,
+        BigInt.fromI32(1)
+      )
+    );
+    // No HatLookup for an unseen hat, so nothing is written at all...
+    assert.notInStore("User", ORG_ID + "-" + DAVE);
+
+    // ...but once the org registers it, the legacy path runs normally even on a BOUND org: the
+    // guard is per-id (Subject-exists AND bound), never per-domain.
+    let lookup = new HatLookup(strayHatId.toString());
+    lookup.hatId = strayHatId;
+    lookup.organization = orgId();
+    lookup.role = ORG_ID + "-" + strayHatId.toString();
+    lookup.save();
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(DAVE),
+        strayHatId,
+        BigInt.fromI32(1)
+      )
+    );
+    assert.fieldEquals("User", ORG_ID + "-" + DAVE, "joinMethod", "HatTransfer");
+    assert.fieldEquals("User", ORG_ID + "-" + DAVE, "membershipStatus", "Active");
   });
 });

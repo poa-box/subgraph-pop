@@ -130,6 +130,23 @@ guess:
   verb: `claim()` consumes ONLY Offer pendings (a delegated Grant/Remove pending survives a
   self-claim and stays open on chain), and `mintHat` emits `RoleGranted` while consuming nothing.
 
+### Post-cutover overlap: hats.ts hands ADOPTED ids over at the bind
+
+Entity-id continuity means the canonical Hats dataSource and the authority template write the SAME
+`RoleWearer` / `User` / `Hat` rows for an adopted id. The legacy tokens are NEVER burned at cutover
+(rollback depends on them surviving) and the toggle-off is ToggleModule-local, so a direct legacy
+interaction stays possible forever: a post-cutover `Hats.renounceHat(adoptedId)` would deactivate a
+`RoleWearer` the authority still holds, and any address can poke `Hats.checkHatStatus(adoptedId)` to
+emit `HatStatusChanged(false)`, which under the documented "AND wearer-balance with `Hat.active`"
+convention reads as *nobody wears this role*.
+
+`src/hats.ts` therefore skips an id when a `Subject` row exists for it AND that subject's authority
+is `isRouterBound` — two entity loads, no eth_calls. The signal is exact in time (the bind is
+ordered BEFORE the toggle-off inside the atomic cutover batch, and `AuthorityUnbound` releases it
+again on rollback) and exact in scope (per-id: a hat in the same tree that was never adopted as a
+subject keeps its legacy writer). Both directions are tested, including the seed window before the
+bind, where legacy Hats is still the truth.
+
 ### Known approximation
 
 `AccessRule.managerSubject` is best-effort. `RuleSet` carries no manager subject, and a manager
@@ -234,7 +251,7 @@ Two build gotchas worth knowing:
 
 ## 6. Tests
 
-`yarn test` — 414 total (333 pre-existing + 81 new):
+`yarn test` — 420 total (333 pre-existing + 87 new):
 
 * `tests/membership-authority.test.ts` (71) — per-handler coverage, one test per FOLD ARM plus the
   precedence ordering, the accepted mirror (paused-seed flag, idempotent mints, unported burn,
@@ -244,13 +261,15 @@ Two build gotchas worth knowing:
   exact log sequence the contract emits.
 * `tests/authority-router.test.ts` (5) — singleton wiring, bind-as-cutover-marker, unbind rollback,
   re-bind.
-* `tests/access-v2-ceremony.test.ts` (5) — the integration replay of the REAL migration sequence
+* `tests/access-v2-ceremony.test.ts` (11) — the integration replay of the REAL migration sequence
   from `script/accessv2/AccessV2MigrationBase.sol` (registration → admin-subject-first seed → role
   subjects → live-default adoption → perms/lint → memberships/bans/vouch/email → cutover in
   `_buildCutoverBatch` order: delta-seed, bind, unpause, toggle-off, verify — and **no burns**),
   asserting the whole entity graph; plus the delta-seed drift shape, the unported-wearer GHOST
   divergence the real ceremony leaves behind, the out-of-band `emitUnportedBurns` cleanup path, and
-  the delegated pending-action lifecycle through finalize.
+  the delegated pending-action lifecycle through finalize; plus the POST-CUTOVER OVERLAP suite
+  (legacy renounceHat / mint / checkHatStatus poke against a bound id, the seed window before the
+  bind, an unbind rollback, and a non-adopted hat of the same org).
 
 `subgraph-lint`: 0 errors. The new mapping adds 13 `derived-field-guard` warnings — a heuristic that
 asks for a child-entity helper call before every parent `save()`; they are false positives here.

@@ -16,10 +16,36 @@ import {
   TransferBatch,
   HatStatusChanged,
 } from "../generated/Hats/Hats";
-import { HatLookup, Hat } from "../generated/schema";
+import { HatLookup, Hat, Subject, MembershipAuthorityContract } from "../generated/schema";
 import { applyHatTransferAdd, applyHatTransferRemove } from "./utils";
 
 const ZERO_ADDRESS = Address.zero();
+
+/**
+ * ACCESS-V2 CUTOVER GUARD — has a `MembershipAuthority` taken ownership of this hat id?
+ *
+ * A migrated org ADOPTS its legacy hat ids verbatim as subject ids, and the authority's own
+ * TransferSingle mirror writes the SAME `RoleWearer` / `User` / `HatLookup` rows this file writes
+ * (that reuse IS the entity-id continuity). The legacy tokens are never burned at cutover —
+ * rollback depends on them surviving — and the toggle-off is ToggleModule-local, so this dataSource
+ * stays a live co-writer of an adopted id forever: a post-cutover `Hats.renounceHat`, a stray
+ * `transferHat`, or a permissionless `checkHatStatus` poke would silently contradict the authority
+ * mirror (deactivating a RoleWearer, unlinking a User, or flipping `Hat.active` false under wearers
+ * the authority still holds).
+ *
+ * The guard is per-ID, not per-domain, and reads two entities this mapping already owns (no
+ * eth_calls): the `Subject` row exists only for an id the authority actually adopted, and the
+ * binding — the atomic cutover marker, ordered BEFORE the toggle-off in the batch — flips
+ * `isRouterBound`. Before the bind (the seed window, when legacy Hats is still the truth) and after
+ * an `AuthorityUnbound` rollback this returns false and the legacy path runs exactly as before.
+ */
+function isAuthorityOwnedHat(hatId: BigInt): boolean {
+  let subject = Subject.load(hatId.toString());
+  if (subject == null) return false;
+  let authority = MembershipAuthorityContract.load(subject.authority);
+  if (authority == null) return false;
+  return authority.isRouterBound;
+}
 
 /**
  * Apply a single hat transfer for one (hatId, value=1) tuple.
@@ -45,6 +71,8 @@ function applyTransfer(
   // we only care about hats in trees we deployed.
   let lookup = HatLookup.load(hatId.toString());
   if (lookup == null) return;
+  // Skip ids a cut-over MembershipAuthority owns: it is the sole writer of those rows now.
+  if (isAuthorityOwnedHat(hatId)) return;
   let orgId = lookup.organization;
 
   let isMint = from.equals(ZERO_ADDRESS);
@@ -101,10 +129,17 @@ export function handleHatsTransferBatch(event: TransferBatch): void {
  * Mark a hat active or inactive in our subgraph. Tokens are NOT burned when a
  * hat is toggled off, so consumers wanting "is X currently wearing this hat?"
  * semantics must AND wearer-balance with Hat.active.
+ *
+ * ...which is exactly why an ADOPTED id of a cut-over org is skipped: the cutover toggles the
+ * legacy hat OFF by design, and any address can then poke `Hats.checkHatStatus(id)` to emit
+ * HatStatusChanged(false). Applying it would make every migrated wearer read as not-wearing under
+ * that documented convention, while the authority holds them. For bound ids, membership lives in
+ * `SubjectMembership`.
  */
 export function handleHatsStatusChanged(event: HatStatusChanged): void {
   let lookup = HatLookup.load(event.params.hatId.toString());
   if (lookup == null) return;
+  if (isAuthorityOwnedHat(event.params.hatId)) return;
   let hatEntityId = lookup.hat;
   if (hatEntityId == null) return;
   let hat = Hat.load(hatEntityId as string);

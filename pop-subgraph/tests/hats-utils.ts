@@ -4,7 +4,7 @@
 
 import { newMockEvent } from "matchstick-as";
 import { ethereum, Address, BigInt } from "@graphprotocol/graph-ts";
-import { TransferSingle } from "../generated/Hats/Hats";
+import { TransferSingle, HatStatusChanged } from "../generated/Hats/Hats";
 
 let nextLogIndex: i32 = 1;
 
@@ -26,5 +26,20 @@ export function createTransferSingleEvent(
   event.parameters.push(new ethereum.EventParam("to", ethereum.Value.fromAddress(to)));
   event.parameters.push(new ethereum.EventParam("id", ethereum.Value.fromUnsignedBigInt(id)));
   event.parameters.push(new ethereum.EventParam("value", ethereum.Value.fromUnsignedBigInt(value)));
+  return event;
+}
+
+export function createHatStatusChangedEvent(
+  hats: Address,
+  hatId: BigInt,
+  newStatus: boolean
+): HatStatusChanged {
+  let event = changetype<HatStatusChanged>(newMockEvent());
+  event.address = hats;
+  event.logIndex = BigInt.fromI32(nextLogIndex);
+  nextLogIndex = nextLogIndex + 1;
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
+  event.parameters.push(new ethereum.EventParam("newStatus", ethereum.Value.fromBoolean(newStatus)));
   return event;
 }
