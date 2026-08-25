@@ -15,12 +15,14 @@ import {
   SwitchableBeaconContract,
   EducationHubContract,
   ParticipationTokenContract,
-  ZkEmailInvites
+  ZkEmailInvites,
+  MembershipAuthorityContract
 } from "../generated/schema";
 import { SwitchableBeacon as SwitchableBeaconTemplate } from "../generated/templates";
 import { OrgMetadata as OrgMetadataTemplate } from "../generated/templates";
 import { EducationHub as EducationHubTemplate } from "../generated/templates";
 import { ZkEmailInvites as ZkEmailInvitesTemplate } from "../generated/templates";
+import { MembershipAuthority as MembershipAuthorityTemplate } from "../generated/templates";
 import { EducationHub as EducationHubAbi } from "../generated/templates/EducationHub/EducationHub";
 import { getOrCreateRole, backfillHatPermissions } from "./utils";
 
@@ -42,6 +44,13 @@ const EDUCATION_HUB_TYPE_ID: Bytes = Bytes.fromHexString(
 // is registered via OrgRegistry.ContractRegistered, so it flows through wirePostDeployModule.
 const ZKEMAIL_INVITES_ID: Bytes = Bytes.fromHexString(
   "0x77a52db12b54c70a33bdf184cac221a69b235b98cf754315952afcffd06ae4db"
+);
+
+// keccak256("MembershipAuthority") — the OrgRegistry typeId for the per-org Access-v2 authority.
+// Mirrors ModuleTypes.MEMBERSHIP_AUTHORITY_ID in the contracts repo. Like ZkEmailInvites the
+// module is never carried by OrgDeployed, so ContractRegistered is the only wiring point.
+const MEMBERSHIP_AUTHORITY_ID: Bytes = Bytes.fromHexString(
+  "0xdff254c0d9c318c4e70eac95af4c0c9189e13f9d51ae2cfe2c1c446c4775ddb8"
 );
 
 /**
@@ -289,6 +298,51 @@ export function handleContractRegistered(event: ContractRegisteredEvent): void {
 function wirePostDeployModule(orgId: Bytes, typeId: Bytes, proxy: Bytes, event: ContractRegisteredEvent): void {
   let org = Organization.load(orgId);
   if (org == null) {
+    return;
+  }
+
+  if (typeId.equals(MEMBERSHIP_AUTHORITY_ID)) {
+    // ACCESS V2. The authority proxy is PREDEPLOYED and atomically initialized in its OWN
+    // transaction (one or more blocks before this registration), so its
+    // MembershipAuthorityInitialized / PausedSet events are cross-block-EARLIER than the template
+    // created below and can never be indexed. Per the repo's zero-eth_calls-in-mappings rule the
+    // deploy-time config is DERIVED here instead:
+    //   executor  <- Organization.executorContract (the authority is gated on that same address)
+    //   paused    <- true (the contract is born paused; unpause happens in the cutover batch and
+    //                emits PausedSet, which this template DOES index)
+    //   orgIdHash <- the registering orgId
+    // `initConfigDerived` records that provenance for consumers.
+    //
+    // Every SUBJECT/rule/membership/perm event is emitted by the seed calls that FOLLOW
+    // registerOrgContract inside the same governance batch (or in later batches), so they all land
+    // at-or-after this template's creation — graph-node backfills same-tx logs.
+    let existingAuthority = MembershipAuthorityContract.load(proxy);
+    if (existingAuthority == null) {
+      let authority = new MembershipAuthorityContract(proxy);
+      authority.organization = org.id;
+      authority.executor =
+        org.executorContract !== null ? changetype<Bytes>(org.executorContract) : null;
+      authority.orgIdHash = orgId;
+      authority.paused = true;
+      authority.initConfigDerived = true;
+      authority.maxDailyVouches = 0;
+      authority.subjectCount = 0;
+      authority.roleSubjectCount = 0;
+      authority.groupSubjectCount = 0;
+      authority.acceptedMembershipCount = 0;
+      authority.isRouterBound = false;
+      authority.registeredAt = event.block.timestamp;
+      authority.registeredAtBlock = event.block.number;
+      authority.lastUpdatedAt = event.block.timestamp;
+      authority.transactionHash = event.transaction.hash;
+      authority.save();
+
+      org.membershipAuthority = proxy;
+      org.lastUpdatedAt = event.block.timestamp;
+      org.save();
+
+      MembershipAuthorityTemplate.create(Address.fromBytes(proxy));
+    }
     return;
   }
 
