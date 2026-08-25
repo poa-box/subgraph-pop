@@ -91,10 +91,17 @@ lifecycle verb that moves acceptance goes through one of them. So:
 * **The lifecycle events own** provenance only: the `SubjectMembershipEvent` feed row (actor,
   `delegated`, `banned`) and closing an open `PendingAction`.
 
-No double counting is possible. The ONE deliberate exception is `emitUnportedBurns`, which fires a
-burn for a legacy wearer who was never ported (drift victim / deliberate drop) so the event-driven
-subgraph carries no permanent ghost. Those users have no accepted row, so the handler clears the
-legacy `RoleWearer` **without decrementing any counter** (tested).
+No double counting is possible. The ONE shape that is not an accepted transition is a burn for a
+user with no accepted row — what `emitUnportedBurns` produces. The handler clears the legacy
+`RoleWearer` **without decrementing any counter** (tested).
+
+**`emitUnportedBurns` is NOT part of the ceremony.** `script/accessv2/AccessV2MigrationBase.sol`
+never calls it (`_buildCutoverBatch` is delta-seed → bind → `setMembershipAuthority` ×8 →
+`targetTypes` → unpause → toggle-off → `CutoverVerifier.verify`), because runbook ruling **R4**
+realizes the spec's "§6 burn-shaped events for unported wearers" as full-port + in-batch count
+verification instead. The handler stays because the selector exists and an operator may use it out
+of band — see the ghost divergence in §7 open items for what that means for a migrated org's
+`RoleWearer` rows.
 
 ### `acceptedAt` caveat
 
@@ -105,12 +112,23 @@ mapping stores the observed block timestamp and sets `seededWhilePaused = true` 
 happened while the mirror knew the authority was paused. Consumers that need the on-chain value for
 a `seededWhilePaused` row should read it as 1.
 
-### `PendingAction.Finalized` is derived
+### Nothing is derived from a verb (rule deletions + pending closure)
 
-`finalize()` emits NO `PendingAction*` event — only the resulting lifecycle event. The mapping
-mirrors the contract's `pendingOf[subject][user]` as `SubjectMembership.pendingAction`, so a
-delegated `RoleGranted` / `RoleOffered` / `RoleRemoved`, or the target's own `RoleClaimed` for an
-Offer pending, closes the row in O(1) and links the resulting feed event.
+Two contract-side event-law fixes (kyoto `ccbc029`) removed the last places this mapping had to
+guess:
+
+* **`RuleCleared` at every durable rule deletion** — renounce of a delegable/delegated grant,
+  `_softRemove` (from `remove(ban=false)` and `finalize(Remove)`), `withdrawOffer`, `cancel` of an
+  Offer pending, `delegatedUnremove`. It is not over-emitted either: `unremove` emits only when a
+  Ban was really deleted, and the soft-remove revert path (`RemovalIneffective`) restores the slot
+  and stays silent. So `handleRuleCleared` is the single, exhaustive deletion signal and the
+  lifecycle handlers replicate NO conditional deletes. The only burn that leaves a rule standing is
+  the renounce of a STICKY governance grant — the §2 reserved seat.
+* **`PendingActionFinalized(pendingId)` at both consumption sites** — `claim()` consuming an Offer
+  and `finalize()` applying a Grant/Remove. `handlePendingActionFinalized` closes exactly that
+  pending and clears `SubjectMembership.pendingAction`. Closure is never inferred from a lifecycle
+  verb: `claim()` consumes ONLY Offer pendings (a delegated Grant/Remove pending survives a
+  self-claim and stays open on chain), and `mintHat` emits `RoleGranted` while consuming nothing.
 
 ### Known approximation
 
@@ -216,19 +234,23 @@ Two build gotchas worth knowing:
 
 ## 6. Tests
 
-`yarn test` — 403 total (333 pre-existing + 70 new):
+`yarn test` — 414 total (333 pre-existing + 81 new):
 
-* `tests/membership-authority.test.ts` (61) — per-handler coverage, one test per FOLD ARM plus the
+* `tests/membership-authority.test.ts` (71) — per-handler coverage, one test per FOLD ARM plus the
   precedence ordering, the accepted mirror (paused-seed flag, idempotent mints, unported burn,
-  RoleWearer/User/HatLookup continuity), and the §5 event-lag-window refolds.
+  RoleWearer/User/HatLookup continuity), the §5 event-lag-window refolds, and the RULE-DELETION
+  EVENT-LAW replays: one test per contract path that deletes a rule slot (renounce delegable vs
+  sticky, soft remove, withdrawOffer, cancel-of-offer, unremove, finalize(Remove)), replaying the
+  exact log sequence the contract emits.
 * `tests/authority-router.test.ts` (5) — singleton wiring, bind-as-cutover-marker, unbind rollback,
   re-bind.
-* `tests/access-v2-ceremony.test.ts` (4) — the integration replay of the REAL migration sequence
+* `tests/access-v2-ceremony.test.ts` (5) — the integration replay of the REAL migration sequence
   from `script/accessv2/AccessV2MigrationBase.sol` (registration → admin-subject-first seed → role
-  subjects → live-default adoption → perms/lint → memberships/bans/vouch/email → cutover in contract
-  order: delta-seed, bind, unpause, unported burns), asserting the whole entity graph; plus the
-  delta-seed drift shape, the unported-ghost cleanup against a real legacy Hats mint, and the
-  delegated pending-action lifecycle through finalize.
+  subjects → live-default adoption → perms/lint → memberships/bans/vouch/email → cutover in
+  `_buildCutoverBatch` order: delta-seed, bind, unpause, toggle-off, verify — and **no burns**),
+  asserting the whole entity graph; plus the delta-seed drift shape, the unported-wearer GHOST
+  divergence the real ceremony leaves behind, the out-of-band `emitUnportedBurns` cleanup path, and
+  the delegated pending-action lifecycle through finalize.
 
 `subgraph-lint`: 0 errors. The new mapping adds 13 `derived-field-guard` warnings — a heuristic that
 asks for a child-entity helper call before every parent `save()`; they are false positives here.
@@ -253,9 +275,16 @@ machine-checkable form of the zero-eth_calls rule.
 4. **`Subject.acceptedUsers` is an array on a mutable entity.** Bounded by `memberCount` (live orgs
    are ~64 memberships total) and it is what makes the lag-window refold possible without derived
    -field iteration. If an org ever grows a role into the thousands, revisit with `store.loadRelated`.
-5. **A chain-vs-subgraph differential test** (isMember vs the mirror over the migration corpus)
+5. **Unported-wearer GHOSTS survive the cutover.** A legacy wearer who is kicked/banned but still
+   holds the un-burned Hats token (the issue-#166 class, real on KUBI today) is ported as a DENY
+   rule and excluded from the delta (`balanceOf` reads 0), so no authority event ever touches their
+   `RoleWearer` row: it stays `isActive = true` forever. Nothing in the ceremony clears it — R4
+   removed the synthetic burns and toggle-off burns nothing (rollback depends on that). For a bound
+   org, **read `SubjectMembership`, not `RoleWearer`**; an operator can also clear a specific ghost
+   out of band with `emitUnportedBurns` (both shapes are tested).
+6. **A chain-vs-subgraph differential test** (isMember vs the mirror over the migration corpus)
    lives on the contracts side of the spec's obligation list; the matchstick suite here pins the
    fold shape, not live parity.
-6. **Base commit.** This branch is based on the local `6596132` (TaskManager v7 claim release), which
+7. **Base commit.** This branch is based on the local `6596132` (TaskManager v7 claim release), which
    is NOT an ancestor of `origin/main` (`359fb22`, the v20 paymaster rulebook work). Rebase before
    opening the PR.

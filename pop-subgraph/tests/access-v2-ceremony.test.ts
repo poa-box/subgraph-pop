@@ -18,7 +18,13 @@
 //
 //   CUTOVER BATCH (atomic, in order):
 //     delta-seed -> router BIND -> setMembershipAuthority x8 -> targetTypes -> UNPAUSE ->
-//     legacy toggle-off -> (unported burns) -> CutoverVerifier.verify
+//     legacy toggle-off -> CutoverVerifier.verify
+//
+// NOTE the absence of emitUnportedBurns: the ceremony NEVER calls it (grep script/accessv2 — no
+// caller), because runbook ruling R4 realizes "§6 burn-shaped events for unported wearers" as
+// full-port + in-batch count verification instead. The mapping still HANDLES a burn-for-a-
+// non-member (the call exists on the contract and an operator may use it out of band), and that
+// path is tested below on its own — but it is not part of the replay.
 //
 // The assertions below are the entity graph the frontend reads afterwards.
 
@@ -288,8 +294,16 @@ function runSeedCeremony(): void {
   seedAcceptOnly(memberHatId(), CAROL);
 }
 
-/** The atomic cutover batch, in the contract's order. */
-function runCutover(includeDelta: boolean, includeUnportedBurn: boolean): void {
+/**
+ * The atomic cutover batch, in _buildCutoverBatch's order (AccessV2MigrationBase.sol:1421):
+ * delta-seed slices -> bindAuthority -> setMembershipAuthority x7 + Executor -> setTargetTypesBatch
+ * -> setPaused(false) -> batchSetHatStatus(off) -> CutoverVerifier.verify.
+ *
+ * There is NO emitUnportedBurns call — the whole script tree contains no caller. Runbook ruling R4
+ * replaced "§6 burn-shaped events for unported wearers" with full-port + in-batch count
+ * verification, so the batch emits no burn at all.
+ */
+function runCutover(includeDelta: boolean): void {
   // 0. DELTA-SEED — legacy wearers who joined between the snapshot and the vote.
   if (includeDelta) {
     seedPair(memberHatId(), DAVE, true);
@@ -306,20 +320,9 @@ function runCutover(includeDelta: boolean, includeUnportedBurn: boolean): void {
   // 2-9. setMembershipAuthority x8 + targetTypes — no authority events.
   // 10. UNPAUSE.
   handleAuthorityPausedSet(createPausedSetEvent(authority(), false));
-  // 11. Legacy toggle-off, then burn-shaped events for wearers who were NOT ported, so the
-  //     event-driven subgraph carries no permanent ghost.
-  if (includeUnportedBurn) {
-    handleAuthorityTransferSingle(
-      createTransferSingleEvent(
-        authority(),
-        Address.fromString(EXECUTOR),
-        Address.fromString(MALLORY),
-        Address.fromString(ZERO_ADDRESS),
-        memberHatId(),
-        BigInt.fromI32(1)
-      )
-    );
-  }
+  // 11. Legacy toggle-off — a ToggleModule-local write; Hats emits nothing and no token is burned
+  //     (rollback DEPENDS on the legacy balances surviving, §6 ROLLBACK).
+  // 12. CutoverVerifier.verify — a require()-only call, no events.
 }
 
 afterEach(() => {
@@ -329,7 +332,7 @@ afterEach(() => {
 describe("Access v2 — the migration ceremony end to end", () => {
   test("the seeded + cutover org resolves to the expected entity graph", () => {
     runSeedCeremony();
-    runCutover(true, true);
+    runCutover(true);
 
     // ---- the authority itself ----
     assert.fieldEquals("Organization", ORG_ID, "membershipAuthority", AUTHORITY);
@@ -434,12 +437,13 @@ describe("Access v2 — the migration ceremony end to end", () => {
     );
   });
 
-  test("an UNPORTED legacy wearer's RoleWearer ghost is cleared by the cutover burn", () => {
+  test("the REAL cutover emits no burn — an unported legacy wearer stays an active RoleWearer", () => {
     runSeedCeremony();
 
-    // Mallory wears the legacy hat on chain today (indexed from the canonical Hats dataSource).
-    // Toggle-off never burns the legacy token, so without the authority's burn-shaped event the
-    // subgraph would carry her as an active wearer forever.
+    // Mallory wears the legacy hat on chain today (indexed from the canonical Hats dataSource) but
+    // is ported as a DENY rule, never as a member. Toggle-off is ToggleModule-local and burns no
+    // token, and the batch calls no emitUnportedBurns (runbook R4: full-port + in-batch count
+    // verification instead), so NOTHING in the ceremony clears her legacy wearer row.
     handleHatsTransferSingle(
       createHatsTransferSingleEvent(
         Address.fromString(HATS),
@@ -453,10 +457,50 @@ describe("Access v2 — the migration ceremony end to end", () => {
     let malloryWearerId = ORG_ID + "-" + memberHatId().toString() + "-" + MALLORY;
     assert.fieldEquals("RoleWearer", malloryWearerId, "isActive", "true");
 
-    runCutover(false, true);
+    runCutover(false);
 
+    // The DIVERGENCE, asserted rather than papered over: the authority says not-a-member while the
+    // legacy wearer row stays active. Consumers of a bound org must read SubjectMembership, not
+    // RoleWearer (Wave-E doc §7 open item).
+    assert.fieldEquals("RoleWearer", malloryWearerId, "isActive", "true");
+    assert.fieldEquals(
+      "SubjectMembership",
+      membershipId(memberHatId(), MALLORY),
+      "isMember",
+      "false"
+    );
+  });
+
+  test("an out-of-band emitUnportedBurns burn clears the ghost WITHOUT touching the counters", () => {
+    // Not part of the ceremony (see above) — but the selector exists and an operator may call it,
+    // so the burn-for-a-non-member path stays covered: it must clear the legacy RoleWearer and
+    // decrement nothing (the user has no accepted row).
+    runSeedCeremony();
+    handleHatsTransferSingle(
+      createHatsTransferSingleEvent(
+        Address.fromString(HATS),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(MALLORY),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    runCutover(false);
+
+    handleAuthorityTransferSingle(
+      createTransferSingleEvent(
+        authority(),
+        Address.fromString(EXECUTOR),
+        Address.fromString(MALLORY),
+        Address.fromString(ZERO_ADDRESS),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+
+    let malloryWearerId = ORG_ID + "-" + memberHatId().toString() + "-" + MALLORY;
     assert.fieldEquals("RoleWearer", malloryWearerId, "isActive", "false");
-    // ...and the unported burn never touched the accepted counters.
     assert.fieldEquals("Subject", memberHatId().toString(), "memberCount", "3");
     assert.fieldEquals("MembershipAuthorityContract", AUTHORITY, "acceptedMembershipCount", "5");
   });
@@ -466,7 +510,7 @@ describe("Access v2 — the migration ceremony end to end", () => {
     // Before the delta, Dave is unknown to the authority.
     assert.notInStore("SubjectMembership", membershipId(memberHatId(), DAVE));
 
-    runCutover(true, false);
+    runCutover(true);
 
     let dave = membershipId(memberHatId(), DAVE);
     assert.fieldEquals("SubjectMembership", dave, "accepted", "true");
@@ -479,7 +523,7 @@ describe("Access v2 — the migration ceremony end to end", () => {
 
   test("PENDING-ACTION LIFECYCLE — an Exec removes a Member through the review window", () => {
     runSeedCeremony();
-    runCutover(false, false);
+    runCutover(false);
 
     // delegatedRemove(memberHat, Alice) by an Executive: the pending opens, nothing changes yet.
     handlePendingActionCreated(
