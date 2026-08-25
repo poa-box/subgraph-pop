@@ -28,6 +28,7 @@ import {
   PendingActionCreated,
   PendingActionCancelled,
   PendingActionVoided,
+  PendingActionFinalized,
   VouchConfigured,
   Vouched,
   VouchRevoked,
@@ -331,6 +332,15 @@ export function createPendingActionVoidedEvent(
   pendingId: BigInt
 ): PendingActionVoided {
   let event = changetype<PendingActionVoided>(base(authority));
+  event.parameters.push(new ethereum.EventParam("pendingId", u256(pendingId)));
+  return event;
+}
+
+export function createPendingActionFinalizedEvent(
+  authority: Address,
+  pendingId: BigInt
+): PendingActionFinalized {
+  let event = changetype<PendingActionFinalized>(base(authority));
   event.parameters.push(new ethereum.EventParam("pendingId", u256(pendingId)));
   return event;
 }

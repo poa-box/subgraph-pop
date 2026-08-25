@@ -36,6 +36,7 @@ import {
   handleMaxMembersSet,
   handleManagerConfigSet,
   handleRuleSet,
+  handleRuleCleared,
   handleRoleGranted,
   handleRoleRemoved,
   handleAuthorityPausedSet,
@@ -46,6 +47,7 @@ import {
   handlePermSet,
   handleConfigLint,
   handlePendingActionCreated,
+  handlePendingActionFinalized,
   handleAuthorityTransferSingle
 } from "../src/membership-authority";
 import { handleAuthorityBound } from "../src/authority-router";
@@ -60,6 +62,7 @@ import {
   createMaxMembersSetEvent,
   createManagerConfigSetEvent,
   createRuleSetEvent,
+  createRuleClearedEvent,
   createRoleGrantedEvent,
   createRoleRemovedEvent,
   createPausedSetEvent,
@@ -70,6 +73,7 @@ import {
   createPermSetEvent,
   createConfigLintEvent,
   createPendingActionCreatedEvent,
+  createPendingActionFinalizedEvent,
   createTransferSingleEvent
 } from "./membership-authority-utils";
 import { createAuthorityBoundEvent } from "./authority-router-utils";
@@ -496,10 +500,13 @@ describe("Access v2 — the migration ceremony end to end", () => {
     assert.fieldEquals("SubjectMembership", alice, "pendingAction", pendingId);
     assert.fieldEquals("SubjectMembership", alice, "isMember", "true");
 
-    // finalize() after the delay: the delegable member-class grant is cleared, the token burns, and
-    // RoleRemoved(delegated) is the only signal that the pending resolved.
-    handleRuleSet(
-      createRuleSetEvent(authority(), memberHatId(), Address.fromString(ALICE), 0, 0, false)
+    // finalize() after the delay, in the contract's emission order: PendingActionFinalized (the
+    // pending is consumed), then _softRemove's RuleCleared, then the burn, then RoleRemoved.
+    handlePendingActionFinalized(
+      createPendingActionFinalizedEvent(authority(), BigInt.fromI32(1))
+    );
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(ALICE))
     );
     handleAuthorityTransferSingle(
       createTransferSingleEvent(

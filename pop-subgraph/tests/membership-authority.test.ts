@@ -28,6 +28,7 @@ import {
   handlePendingActionCreated,
   handlePendingActionCancelled,
   handlePendingActionVoided,
+  handlePendingActionFinalized,
   handleVouchConfigured,
   handleVouched,
   handleVouchRevoked,
@@ -66,6 +67,7 @@ import {
   createPendingActionCreatedEvent,
   createPendingActionCancelledEvent,
   createPendingActionVoidedEvent,
+  createPendingActionFinalizedEvent,
   createVouchConfiguredEvent,
   createVouchedEvent,
   createVouchRevokedEvent,
@@ -658,13 +660,18 @@ describe("MembershipAuthority — accepted mirror (TransferSingle)", () => {
   });
 
   test("a burn clears acceptance and both counters", () => {
-    grantRule(memberHatId(), ALICE, true);
+    // STICKY grant on purpose: the renounce of a sticky governance grant is the ONLY path that
+    // burns the token while leaving the rule standing (every other burn path — renounce of a
+    // delegable/delegated grant, soft remove, a ban — deletes or overwrites the rule first and says
+    // so with RuleCleared / RuleSet). Asserting "claimable" after a bare burn over a DELEGABLE
+    // grant asserted a state the chain cannot be in.
+    grantRule(memberHatId(), ALICE, false);
     mint(memberHatId(), ALICE);
     burn(memberHatId(), ALICE);
     let id = membershipId(memberHatId(), ALICE);
     assert.fieldEquals("SubjectMembership", id, "accepted", "false");
     assert.fieldEquals("SubjectMembership", id, "isMember", "false");
-    // The grant survives a plain burn, so the seat stays CLAIMABLE (the §2 reserved-seat state).
+    // The sticky grant survives, so the seat stays CLAIMABLE (the §2 reserved-seat state).
     assert.fieldEquals("SubjectMembership", id, "claimable", "true");
     assert.fieldEquals("Subject", memberHatId().toString(), "memberCount", "0");
     assert.fieldEquals("Subject", memberHatId().toString(), "activeMemberCount", "0");
@@ -1139,8 +1146,8 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
     assert.fieldEquals("PendingAction", AUTHORITY + "-2", "status", "Voided");
   });
 
-  test("FINALIZE is DERIVED — a delegated RoleGranted closes the pending", () => {
-    // finalize() emits no PendingAction event; the lifecycle event it produces is the only signal.
+  test("finalize(Grant) — PendingActionFinalized closes it, RoleGranted only records provenance", () => {
+    // finalize() emits PendingActionFinalized BEFORE the rule write and the lifecycle event.
     handlePendingActionCreated(
       createPendingActionCreatedEvent(
         authority(),
@@ -1151,6 +1158,9 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
         Address.fromString(MANAGER),
         BigInt.fromI32(2000)
       )
+    );
+    handlePendingActionFinalized(
+      createPendingActionFinalizedEvent(authority(), BigInt.fromI32(3))
     );
     grantRule(memberHatId(), ALICE, true);
     mint(memberHatId(), ALICE);
@@ -1169,7 +1179,7 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
     );
   });
 
-  test("an OFFER pending is finalized by the target's own claim", () => {
+  test("claim() consuming an OFFER pending emits PendingActionFinalized before RoleClaimed", () => {
     handlePendingActionCreated(
       createPendingActionCreatedEvent(
         authority(),
@@ -1182,13 +1192,20 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
       )
     );
     assert.fieldEquals("PendingAction", AUTHORITY + "-4", "action", "Offer");
+    handlePendingActionFinalized(
+      createPendingActionFinalizedEvent(authority(), BigInt.fromI32(4))
+    );
+    mint(memberHatId(), ALICE);
     handleRoleClaimed(
       createRoleClaimedEvent(authority(), memberHatId(), Address.fromString(ALICE))
     );
     assert.fieldEquals("PendingAction", AUTHORITY + "-4", "status", "Finalized");
+    assert.assertNull(
+      SubjectMembership.load(membershipId(memberHatId(), ALICE))!.pendingAction
+    );
   });
 
-  test("a delegated REMOVE finalizes through RoleRemoved", () => {
+  test("finalize(Remove) — the pending closes on its own event, not on RoleRemoved", () => {
     handlePendingActionCreated(
       createPendingActionCreatedEvent(
         authority(),
@@ -1199,6 +1216,9 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
         Address.fromString(MANAGER),
         BigInt.fromI32(2000)
       )
+    );
+    handlePendingActionFinalized(
+      createPendingActionFinalizedEvent(authority(), BigInt.fromI32(5))
     );
     handleRoleRemoved(
       createRoleRemovedEvent(
@@ -1211,6 +1231,280 @@ describe("MembershipAuthority — pending actions (the review window)", () => {
       )
     );
     assert.fieldEquals("PendingAction", AUTHORITY + "-5", "status", "Finalized");
+  });
+
+  test("a SELF-CLAIM over an open delegated REMOVE pending leaves it Pending", () => {
+    // claim() consumes ONLY Offer pendings (MembershipAuthority.sol:60-69). A pending Remove
+    // survives the claim on chain — deriving closure from RoleClaimed used to hide it from the UI
+    // right up until it removed the user.
+    handlePendingActionCreated(
+      createPendingActionCreatedEvent(
+        authority(),
+        BigInt.fromI32(6),
+        memberHatId(),
+        Address.fromString(ALICE),
+        2,
+        Address.fromString(MANAGER),
+        BigInt.fromI32(2000)
+      )
+    );
+    handleSubjectDefaultSet(createSubjectDefaultSetEvent(authority(), memberHatId(), true));
+    mint(memberHatId(), ALICE);
+    handleRoleClaimed(
+      createRoleClaimedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+    assert.fieldEquals("PendingAction", AUTHORITY + "-6", "status", "Pending");
+    assert.fieldEquals(
+      "SubjectMembership",
+      membershipId(memberHatId(), ALICE),
+      "pendingAction",
+      AUTHORITY + "-6"
+    );
+  });
+
+  test("mintHat's RoleGranted consumes nothing — an open GRANT pending stays open", () => {
+    // mintHat (MembershipAuthority.sol:184-194) emits RoleGranted without touching any pending.
+    handlePendingActionCreated(
+      createPendingActionCreatedEvent(
+        authority(),
+        BigInt.fromI32(7),
+        memberHatId(),
+        Address.fromString(BOB),
+        0,
+        Address.fromString(MANAGER),
+        BigInt.fromI32(2000)
+      )
+    );
+    grantRule(memberHatId(), BOB, true);
+    mint(memberHatId(), BOB);
+    handleRoleGranted(
+      createRoleGrantedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(BOB),
+        Address.fromString(EXECUTOR),
+        false
+      )
+    );
+    assert.fieldEquals("PendingAction", AUTHORITY + "-7", "status", "Pending");
+  });
+});
+
+/*
+ * THE EVENT-LAW REPLAYS — one test per contract path that DELETES a rule slot, replaying the exact
+ * log sequence the fixed contract emits (kyoto ccbc029: RuleCleared at every durable deletion,
+ * never over-emitted). The mapping must land the fold from those logs alone; it deliberately does
+ * NOT replicate the contract's conditional `delete` branches.
+ */
+describe("MembershipAuthority — rule-deletion event law (contract path replays)", () => {
+  beforeEach(() => {
+    setupOrgWithAuthority();
+    createRoleSubject(memberHatId(), "Member"); // deny-by-default
+  });
+
+  test("renounce of a DELEGABLE grant — RuleCleared + burn + RoleRenounced leaves nothing claimable", () => {
+    grantRule(memberHatId(), ALICE, true);
+    mint(memberHatId(), ALICE);
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("SubjectMembership", id, "isMember", "true");
+
+    // renounce(): delete l.ruleOf -> RuleCleared, _flipOff -> TransferSingle burn, RoleRenounced.
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+    burn(memberHatId(), ALICE);
+    handleRoleRenounced(
+      createRoleRenouncedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+
+    assert.fieldEquals("AccessRule", id, "kind", "None");
+    assert.fieldEquals("SubjectMembership", id, "ruleKind", "None");
+    assert.fieldEquals("SubjectMembership", id, "accepted", "false");
+    assert.fieldEquals("SubjectMembership", id, "eligible", "false");
+    assert.fieldEquals("SubjectMembership", id, "eligibilitySource", "None");
+    // The seat is GONE, not reserved: canClaim() is false on chain, so claimable must be false.
+    assert.fieldEquals("SubjectMembership", id, "claimable", "false");
+    assert.fieldEquals("Subject", memberHatId().toString(), "memberCount", "0");
+    assert.fieldEquals("Subject", memberHatId().toString(), "activeMemberCount", "0");
+  });
+
+  test("renounce of a STICKY grant — no RuleCleared, so the reserved seat stays CLAIMABLE", () => {
+    // The ONLY burn path that leaves a Grant standing: a governance grant with delegable=false.
+    grantRule(memberHatId(), ALICE, false);
+    mint(memberHatId(), ALICE);
+    burn(memberHatId(), ALICE);
+    handleRoleRenounced(
+      createRoleRenouncedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("AccessRule", id, "sticky", "true");
+    assert.fieldEquals("SubjectMembership", id, "accepted", "false");
+    assert.fieldEquals("SubjectMembership", id, "claimable", "true");
+    assert.fieldEquals("SubjectMembership", id, "eligibilitySource", "ExplicitGrant");
+  });
+
+  test("soft remove — RuleCleared + burn + RoleRemoved(banned=false) drops eligibility too", () => {
+    grantRule(memberHatId(), ALICE, true);
+    mint(memberHatId(), ALICE);
+
+    // _softRemove: delete the Grant -> RuleCleared, _flipOff -> burn, RoleRemoved(banned=false).
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+    burn(memberHatId(), ALICE);
+    handleRoleRemoved(
+      createRoleRemovedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(ALICE),
+        false,
+        Address.fromString(EXECUTOR),
+        false
+      )
+    );
+
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("SubjectMembership", id, "ruleKind", "None");
+    assert.fieldEquals("SubjectMembership", id, "isMember", "false");
+    assert.fieldEquals("SubjectMembership", id, "claimable", "false");
+  });
+
+  test("a soft remove that would be INEFFECTIVE emits nothing — the mirror keeps the rule", () => {
+    // _softRemove restores the slot and reverts RemovalIneffective when another source survives,
+    // so no RuleCleared reaches the mirror and the sticky grant must still stand.
+    grantRule(memberHatId(), ALICE, false);
+    mint(memberHatId(), ALICE);
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("AccessRule", id, "kind", "Grant");
+    assert.fieldEquals("SubjectMembership", id, "isMember", "true");
+  });
+
+  test("withdrawOffer — RuleCleared + OfferWithdrawn kills the claimable seat (no burn follows)", () => {
+    // offer(): RuleSet(Grant) + RoleOffered. The target never accepted, so nothing else self-heals
+    // this row — withdrawOffer's RuleCleared is the ONLY signal.
+    grantRule(memberHatId(), BOB, true);
+    handleRoleOffered(
+      createRoleOfferedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(BOB),
+        Address.fromString(EXECUTOR),
+        false
+      )
+    );
+    let id = membershipId(memberHatId(), BOB);
+    assert.fieldEquals("SubjectMembership", id, "claimable", "true");
+
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(BOB))
+    );
+    handleOfferWithdrawn(
+      createOfferWithdrawnEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(BOB),
+        Address.fromString(EXECUTOR)
+      )
+    );
+
+    assert.fieldEquals("AccessRule", id, "kind", "None");
+    assert.fieldEquals("SubjectMembership", id, "claimable", "false");
+    assert.fieldEquals("SubjectMembership", id, "eligible", "false");
+  });
+
+  test("cancel of an OFFER pending — RuleCleared + PendingActionCancelled drop the delegated rule", () => {
+    // delegatedOffer writes a Delegated Grant and opens the pending; cancel() must undo BOTH.
+    handleRuleSet(
+      createRuleSetEvent(authority(), memberHatId(), Address.fromString(BOB), 1, 1, true)
+    );
+    handlePendingActionCreated(
+      createPendingActionCreatedEvent(
+        authority(),
+        BigInt.fromI32(9),
+        memberHatId(),
+        Address.fromString(BOB),
+        1,
+        Address.fromString(MANAGER),
+        BigInt.fromI32(2000)
+      )
+    );
+    handleRoleOffered(
+      createRoleOfferedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(BOB),
+        Address.fromString(MANAGER),
+        true
+      )
+    );
+    let id = membershipId(memberHatId(), BOB);
+    assert.fieldEquals("SubjectMembership", id, "claimable", "true");
+
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(BOB))
+    );
+    handlePendingActionCancelled(
+      createPendingActionCancelledEvent(authority(), BigInt.fromI32(9), Address.fromString(MANAGER))
+    );
+
+    assert.fieldEquals("SubjectMembership", id, "claimable", "false");
+    assert.fieldEquals("PendingAction", AUTHORITY + "-9", "status", "Cancelled");
+  });
+
+  test("unremove of a BAN clears it; unremove over a live GRANT emits nothing at all", () => {
+    banRule(memberHatId(), MANAGER);
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(MANAGER))
+    );
+    assert.fieldEquals("AccessRule", membershipId(memberHatId(), MANAGER), "kind", "None");
+
+    // unremove() on a (subject, user) holding a GRANT deletes nothing and — since ccbc029 — emits
+    // nothing, so the mirror must keep the live grant.
+    grantRule(memberHatId(), ALICE, false);
+    mint(memberHatId(), ALICE);
+    let alice = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("AccessRule", alice, "kind", "Grant");
+    assert.fieldEquals("SubjectMembership", alice, "isMember", "true");
+  });
+
+  test("finalize(Remove) delegated — Finalized, RuleCleared, burn, RoleRemoved land as one story", () => {
+    grantRule(memberHatId(), ALICE, true);
+    mint(memberHatId(), ALICE);
+    handlePendingActionCreated(
+      createPendingActionCreatedEvent(
+        authority(),
+        BigInt.fromI32(11),
+        memberHatId(),
+        Address.fromString(ALICE),
+        2,
+        Address.fromString(MANAGER),
+        BigInt.fromI32(2000)
+      )
+    );
+    // finalize(): PendingActionFinalized -> _softRemove(RuleCleared -> burn -> RoleRemoved).
+    handlePendingActionFinalized(
+      createPendingActionFinalizedEvent(authority(), BigInt.fromI32(11))
+    );
+    handleRuleCleared(
+      createRuleClearedEvent(authority(), memberHatId(), Address.fromString(ALICE))
+    );
+    burn(memberHatId(), ALICE);
+    handleRoleRemoved(
+      createRoleRemovedEvent(
+        authority(),
+        memberHatId(),
+        Address.fromString(ALICE),
+        false,
+        Address.fromString(MANAGER),
+        true
+      )
+    );
+
+    let id = membershipId(memberHatId(), ALICE);
+    assert.fieldEquals("PendingAction", AUTHORITY + "-11", "status", "Finalized");
+    assert.fieldEquals("SubjectMembership", id, "accepted", "false");
+    assert.fieldEquals("SubjectMembership", id, "claimable", "false");
+    assert.assertNull(SubjectMembership.load(id)!.pendingAction);
   });
 });
 

@@ -28,6 +28,11 @@
 //    Role / RoleWearer / User / HatLookup keep the ids the static Hats dataSource writes
 //    (entity-id continuity across the cutover).
 //
+// 3. NOTHING IS DERIVED FROM A VERB. Every rule deletion emits RuleCleared and every pending
+//    consumption emits PendingActionFinalized (contract-side event law), so this file mirrors rule
+//    and pending state from those two events alone — it never replicates the contract's conditional
+//    `delete` branches, and never closes a pending because some lifecycle event happened to arrive.
+//
 // ZERO eth_calls: every field below comes from a log.
 
 import { Address, BigInt, Bytes, ethereum, log } from "@graphprotocol/graph-ts";
@@ -52,6 +57,7 @@ import {
   PendingActionCreated as PendingActionCreatedEvent,
   PendingActionCancelled as PendingActionCancelledEvent,
   PendingActionVoided as PendingActionVoidedEvent,
+  PendingActionFinalized as PendingActionFinalizedEvent,
   VouchConfigured as VouchConfiguredEvent,
   Vouched as VouchedEvent,
   VouchRevoked as VouchRevokedEvent,
@@ -427,33 +433,6 @@ function recordMembershipEvent(
   return row;
 }
 
-/**
- * finalize() emits NO PendingAction event — only the resulting lifecycle event — so a delegated
- * lifecycle event is what closes the review-window row. The open pending is reachable in O(1) via
- * SubjectMembership.pendingAction (the mirror of the contract's `pendingOf[subject][user]`).
- */
-function resolvePendingOnLifecycle(
-  membership: SubjectMembership,
-  feedRow: SubjectMembershipEvent,
-  event: ethereum.Event
-): void {
-  let pendingId = membership.pendingAction;
-  if (pendingId === null) {
-    return;
-  }
-  let pending = PendingAction.load(changetype<string>(pendingId));
-  if (pending != null && pending.status == "Pending") {
-    pending.status = "Finalized";
-    pending.resolvedAt = event.block.timestamp;
-    pending.resultEvent = feedRow.id;
-    pending.save();
-    feedRow.pendingAction = pending.id;
-    feedRow.save();
-  }
-  membership.pendingAction = null;
-  membership.save();
-}
-
 /*═══════════════════════════════ authority lifecycle ═══════════════════════════════*/
 
 /**
@@ -763,6 +742,23 @@ export function handleRuleSet(event: RuleSetEvent): void {
   refold(subject, membership, event);
 }
 
+/**
+ * RuleCleared — the ONE signal for a deleted rule slot, and it is exhaustive. The contract emits it
+ * at EVERY durable deletion and at no other time:
+ *
+ *   clearRule                      RuleCleared
+ *   setRule(kind=None)             RuleSet(None)                        (handled above)
+ *   renounce (delegable/delegated) RuleCleared -> TransferSingle burn -> RoleRenounced
+ *   _softRemove (remove/finalize)  RuleCleared -> TransferSingle burn -> RoleRemoved(banned=false)
+ *   withdrawOffer                  RuleCleared -> OfferWithdrawn [-> PendingActionVoided]
+ *   cancel(Offer pending)          RuleCleared -> PendingActionCancelled
+ *   delegatedUnremove              RuleCleared [-> PendingActionVoided]
+ *   unremove                       RuleCleared ONLY when a Ban was really deleted
+ *
+ * The soft-remove revert path (RemovalIneffective) restores the slot and emits nothing, and a
+ * renounce that leaves a STICKY governance grant standing emits nothing either — so this handler is
+ * exact in both directions and the lifecycle handlers must NOT replicate any conditional delete.
+ */
 export function handleRuleCleared(event: RuleClearedEvent): void {
   let authority = loadAuthority(event.address);
   if (authority == null) {
@@ -841,7 +837,7 @@ export function handleRoleGranted(event: RoleGrantedEvent): void {
   let membership = getOrCreateMembership(authority, subject, event.params.user, event);
   linkMembershipUser(membership, event);
   membership.save();
-  let row = recordMembershipEvent(
+  recordMembershipEvent(
     event,
     authority,
     subject,
@@ -852,7 +848,6 @@ export function handleRoleGranted(event: RoleGrantedEvent): void {
     false,
     false
   );
-  resolvePendingOnLifecycle(membership, row, event);
 }
 
 /** RoleClaimed — the USER acted (self-claim on an open role, or accepting an offer). */
@@ -865,7 +860,7 @@ export function handleRoleClaimed(event: RoleClaimedEvent): void {
   let membership = getOrCreateMembership(authority, subject, event.params.user, event);
   linkMembershipUser(membership, event);
   membership.save();
-  let row = recordMembershipEvent(
+  recordMembershipEvent(
     event,
     authority,
     subject,
@@ -876,8 +871,8 @@ export function handleRoleClaimed(event: RoleClaimedEvent): void {
     false,
     false
   );
-  // A claim is also how a delegated OFFER finalizes (claim() consumes the pending).
-  resolvePendingOnLifecycle(membership, row, event);
+  // A claim consuming an OFFER pending closes it through PendingActionFinalized, which the contract
+  // emits in the same call — never derived from this verb (claim() leaves Grant/Remove pendings OPEN).
 }
 
 export function handleRoleRemoved(event: RoleRemovedEvent): void {
@@ -887,7 +882,7 @@ export function handleRoleRemoved(event: RoleRemovedEvent): void {
   }
   let subject = getOrCreateSubject(authority, event.params.subjectId, event);
   let membership = getOrCreateMembership(authority, subject, event.params.user, event);
-  let row = recordMembershipEvent(
+  recordMembershipEvent(
     event,
     authority,
     subject,
@@ -898,7 +893,6 @@ export function handleRoleRemoved(event: RoleRemovedEvent): void {
     event.params.banned,
     true
   );
-  resolvePendingOnLifecycle(membership, row, event);
 }
 
 /** RoleRenounced renders self-exit truthfully — "Alice left", never "Alice was removed". */
@@ -993,6 +987,20 @@ export function handlePendingActionCancelled(event: PendingActionCancelledEvent)
 /** Voided = superseded by a governance rule write on the same (subject, user). */
 export function handlePendingActionVoided(event: PendingActionVoidedEvent): void {
   closePending(event.address, event.params.pendingId, "Voided", null, event);
+}
+
+/**
+ * Finalized = CONSUMED by its completing verb. The contract emits this at BOTH consumption sites —
+ * claim() consuming an Offer pending and finalize() applying a Grant/Remove — so closure is read
+ * from a log, never derived from a lifecycle verb.
+ *
+ * Deriving it was wrong in both directions: claim() consumes ONLY Offer pendings, so a self-claim
+ * over an open delegated Grant/Remove pending used to close a row the chain kept open (the UI then
+ * hid a pending that later removed the user), and mintHat emits RoleGranted while consuming nothing.
+ * The pendingId is carried by the event, so EXACTLY the closed pending is closed here.
+ */
+export function handlePendingActionFinalized(event: PendingActionFinalizedEvent): void {
+  closePending(event.address, event.params.pendingId, "Finalized", null, event);
 }
 
 function closePending(

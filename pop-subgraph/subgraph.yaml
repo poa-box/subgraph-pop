@@ -970,6 +970,8 @@ templates:
           handler: handlePendingActionCancelled
         - event: PendingActionVoided(indexed uint256)
           handler: handlePendingActionVoided
+        - event: PendingActionFinalized(indexed uint256)
+          handler: handlePendingActionFinalized
         - event: VouchConfigured(indexed uint256,uint32,indexed uint256)
           handler: handleVouchConfigured
         - event: Vouched(indexed uint256,indexed address,indexed address)

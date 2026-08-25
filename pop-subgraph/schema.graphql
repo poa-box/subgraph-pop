@@ -2994,9 +2994,9 @@ type SubjectMembership @entity(immutable: false) {
   vouchCount: Int!
   vouchEpoch: BigInt! # the wearer's vouch epoch; stale vs the subject epoch => count reads as 0
   vouchMet: Boolean!
-  # The open delegated action targeting this (subject, user), if any. Maintained so a delegated
-  # lifecycle event can resolve "which pending finalized" without an eth_call (finalize() emits no
-  # PendingAction* event — only the resulting lifecycle event).
+  # The OPEN delegated action targeting this (subject, user), if any — the mirror of the contract's
+  # `pendingOf[subject][user]`. Cleared by the PendingAction* event that closes the row
+  # (Cancelled / Voided / Finalized), never by a lifecycle verb.
   pendingAction: PendingAction
   vouches: [SubjectVouchRecord!]! @derivedFrom(field: "membership")
   firstSeenAt: BigInt!
@@ -3167,12 +3167,13 @@ enum PendingActionStatus {
   Pending
   Cancelled # PendingActionCancelled — an authorised manager/executor cancelled it
   Voided # PendingActionVoided — a governance rule write superseded it
-  Finalized # finalize()/claim() landed; derived from the resulting lifecycle event
+  Finalized # PendingActionFinalized — finalize()/claim() CONSUMED it (read from the log, not derived)
 }
 
-# The review-window ledger (delegation MACHINERY, never a membership condition). finalize() emits
-# NO PendingAction event — only the resulting lifecycle event — so `Finalized` is derived by the
-# lifecycle handlers via SubjectMembership.pendingAction.
+# The review-window ledger (delegation MACHINERY, never a membership condition). Every terminal
+# transition is event-sourced: the contract emits PendingActionFinalized at both consumption sites
+# (claim() consuming an Offer, finalize() applying a Grant/Remove), so no status is ever inferred
+# from a lifecycle verb — claim() leaves a delegated Grant/Remove pending OPEN on chain.
 type PendingAction @entity(immutable: false) {
   id: String! # authorityAddress-pendingId
   authority: MembershipAuthorityContract!
@@ -3190,8 +3191,6 @@ type PendingAction @entity(immutable: false) {
   createdAtBlock: BigInt!
   resolvedAt: BigInt
   cancelledBy: Bytes
-  # The lifecycle event that finalized it (RoleGranted / RoleOffered / RoleRemoved / RoleClaimed).
-  resultEvent: SubjectMembershipEvent
   transactionHash: Bytes!
 }
 
@@ -3253,7 +3252,6 @@ type SubjectMembershipEvent @entity(immutable: true) {
   actorUsername: String
   # True when the act came through the manager-delegation path (render "by Executives").
   delegated: Boolean!
-  pendingAction: PendingAction
   timestamp: BigInt!
   block: BigInt!
   transactionHash: Bytes!
