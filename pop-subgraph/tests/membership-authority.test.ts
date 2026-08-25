@@ -80,7 +80,7 @@ import {
   createConfigLintEvent,
   createTransferSingleEvent
 } from "./membership-authority-utils";
-import { Organization, SubjectMembership, Subject } from "../generated/schema";
+import { Organization, SubjectMembership, Subject, ManagerConfig } from "../generated/schema";
 
 // keccak256("MembershipAuthority") — must mirror ModuleTypes.MEMBERSHIP_AUTHORITY_ID.
 const MEMBERSHIP_AUTHORITY_TYPE_ID = "0xdff254c0d9c318c4e70eac95af4c0c9189e13f9d51ae2cfe2c1c446c4775ddb8";
@@ -380,10 +380,9 @@ describe("MembershipAuthority — subjects", () => {
       createManagerConfigSetEvent(authority(), memberHatId(), BigInt.zero(), 0, 0)
     );
     assert.fieldEquals("ManagerConfig", id, "enabled", "false");
-    assert.assertNull(
-      // managerSubject is cleared when the delegation is removed
-      SubjectMembership.load("nonexistent")
-    );
+    assert.fieldEquals("ManagerConfig", id, "managerSubjectId", "0");
+    // The delegation pointer itself is dropped, so no delegate resolves through it.
+    assert.assertNull(ManagerConfig.load(id)!.managerSubject);
   });
 });
 
