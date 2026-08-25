@@ -58,6 +58,8 @@ import {
 } from "../src/membership-authority";
 import { handleAuthorityBound, handleAuthorityUnbound } from "../src/authority-router";
 import { handleContractRegistered } from "../src/org-registry";
+import { handleQuickJoined } from "../src/quick-join";
+import { createQuickJoinedEvent } from "./quick-join-utils";
 import { handleHatsTransferSingle, handleHatsStatusChanged } from "../src/hats";
 import { createContractRegisteredEvent } from "./org-registry-utils";
 import {
@@ -89,7 +91,7 @@ import {
   createAuthorityBoundEvent,
   createAuthorityUnboundEvent
 } from "./authority-router-utils";
-import { Hat, HatLookup, Organization } from "../generated/schema";
+import { Hat, HatLookup, Organization, QuickJoinContract } from "../generated/schema";
 
 const MEMBERSHIP_AUTHORITY_TYPE_ID = "0xdff254c0d9c318c4e70eac95af4c0c9189e13f9d51ae2cfe2c1c446c4775ddb8";
 
@@ -112,6 +114,7 @@ const ZERO_HASH = "0x00000000000000000000000000000000000000000000000000000000000
 const DD_VOTE_KEY = "0x00aabbccddeeff00112233445566778899aabbccddeeff001122334455667788";
 const SUBJECT_RENAME_KEY = "0x00ffeeddccbbaa00112233445566778899aabbccddeeff001122334455667788";
 const TOPHAT_DOMAIN = 1077;
+const QUICK_JOIN = "0x00000000000000000000000000000000000000c1";
 
 function authority(): Address {
   return Address.fromString(AUTHORITY);
@@ -780,5 +783,59 @@ describe("Access v2 — post-cutover overlap with the canonical Hats dataSource"
     );
     assert.fieldEquals("User", ORG_ID + "-" + DAVE, "joinMethod", "HatTransfer");
     assert.fieldEquals("User", ORG_ID + "-" + DAVE, "membershipStatus", "Active");
+  });
+});
+
+
+/*
+ * POST-CUTOVER JOIN CHOREOGRAPHY — main's User-creation rework (#210) makes applyHatTransferAdd
+ * write a "HatTransfer" PLACEHOLDER User that the module's own join event upgrades later in the
+ * SAME block. Post-cutover the first writer for a QuickJoin member is the AUTHORITY's TransferSingle
+ * mint (QuickJoin calls the authority, then emits QuickJoined), so the authority mirror is now the
+ * placeholder producer for that path — a combination neither wave exercised on its own.
+ */
+describe("Access v2 — post-cutover QuickJoin lands on the authority's placeholder User", () => {
+  test("the authority mint creates the placeholder and QuickJoined upgrades joinMethod", () => {
+    runSeedCeremony();
+    runCutover(false);
+
+    let quickJoin = Address.fromString(QUICK_JOIN);
+    let qj = new QuickJoinContract(quickJoin);
+    qj.organization = orgId();
+    qj.executor = Address.fromString(EXECUTOR);
+    qj.hatsContract = Address.fromString(HATS);
+    qj.accountRegistry = Address.zero();
+    qj.masterDeployAddress = Address.zero();
+    qj.memberHatIds = [memberHatId()];
+    qj.createdAt = BigInt.fromI32(1000);
+    qj.createdAtBlock = BigInt.fromI32(100);
+    qj.save();
+
+    // 1. QuickJoin -> authority: the mint fires first, so the User is born as a placeholder.
+    handleAuthorityTransferSingle(
+      createTransferSingleEvent(
+        authority(),
+        Address.fromString(EXECUTOR),
+        Address.fromString(ZERO_ADDRESS),
+        Address.fromString(DAVE),
+        memberHatId(),
+        BigInt.fromI32(1)
+      )
+    );
+    assert.fieldEquals("User", ORG_ID + "-" + DAVE, "joinMethod", "HatTransfer");
+
+    // 2. ...then QuickJoin emits its own event in the same block and claims the join.
+    handleQuickJoined(createQuickJoinedEvent(quickJoin, Address.fromString(DAVE), [memberHatId()]));
+
+    assert.fieldEquals("User", ORG_ID + "-" + DAVE, "joinMethod", "QuickJoin");
+    assert.fieldEquals("User", ORG_ID + "-" + DAVE, "membershipStatus", "Active");
+    // One membership row, one wearer row — the two writers agree on the id.
+    assert.fieldEquals("SubjectMembership", membershipId(memberHatId(), DAVE), "accepted", "true");
+    assert.fieldEquals(
+      "RoleWearer",
+      ORG_ID + "-" + memberHatId().toString() + "-" + DAVE,
+      "isActive",
+      "true"
+    );
   });
 });

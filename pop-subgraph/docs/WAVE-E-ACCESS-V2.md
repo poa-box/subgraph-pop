@@ -257,7 +257,7 @@ Two build gotchas worth knowing:
 
 ## 6. Tests
 
-`yarn test` — 424 total (333 pre-existing + 91 new):
+`yarn test` — 482 total (390 pre-existing on `origin/main` b3e5fc2 + 92 new):
 
 * `tests/membership-authority.test.ts` (75) — per-handler coverage, one test per FOLD ARM plus the
   precedence ordering, the accepted mirror (paused-seed flag, idempotent mints, unported burn,
@@ -267,7 +267,7 @@ Two build gotchas worth knowing:
   exact log sequence the contract emits.
 * `tests/authority-router.test.ts` (5) — singleton wiring, bind-as-cutover-marker, unbind rollback,
   re-bind.
-* `tests/access-v2-ceremony.test.ts` (11) — the integration replay of the REAL migration sequence
+* `tests/access-v2-ceremony.test.ts` (12) — the integration replay of the REAL migration sequence
   from `script/accessv2/AccessV2MigrationBase.sol` (registration → admin-subject-first seed → role
   subjects → live-default adoption → perms/lint → memberships/bans/vouch/email → cutover in
   `_buildCutoverBatch` order: delta-seed, bind, unpause, toggle-off, verify — and **no burns**),
@@ -275,9 +275,11 @@ Two build gotchas worth knowing:
   divergence the real ceremony leaves behind, the out-of-band `emitUnportedBurns` cleanup path, and
   the delegated pending-action lifecycle through finalize; plus the POST-CUTOVER OVERLAP suite
   (legacy renounceHat / mint / checkHatStatus poke against a bound id, the seed window before the
-  bind, an unbind rollback, and a non-adopted hat of the same org).
+  bind, an unbind rollback, and a non-adopted hat of the same org), and the post-cutover QuickJoin
+  choreography against main's placeholder-User semantics.
 
-`subgraph-lint`: 0 errors. The new mapping adds 13 `derived-field-guard` warnings — a heuristic that
+`subgraph-lint`: 0 errors (40 warnings repo-wide). The new mappings account for 15
+`derived-field-guard` warnings — a heuristic that
 asks for a child-entity helper call before every parent `save()`; they are false positives here.
 Notably it reports **zero `undeclared-eth-call` warnings for the new files**, which is the
 machine-checkable form of the zero-eth_calls rule.
@@ -310,6 +312,12 @@ machine-checkable form of the zero-eth_calls rule.
 6. **A chain-vs-subgraph differential test** (isMember vs the mirror over the migration corpus)
    lives on the contracts side of the spec's obligation list; the matchstick suite here pins the
    fold shape, not live parity.
-7. **Base commit.** This branch is based on the local `6596132` (TaskManager v7 claim release), which
-   is NOT an ancestor of `origin/main` (`359fb22`, the v20 paymaster rulebook work). Rebase before
-   opening the PR.
+7. **Base commit — DONE.** The branch is rebased onto `origin/main` `b3e5fc2` (which carries #207's
+   v20 paymaster rulebook, #208's EducationHub backfill and #210's audit remediation). The branch's
+   own TaskManager-v7 commit was a duplicate of main's `99ba838` and was dropped by the rebase; the
+   one real conflict (`org-registry.ts` imports, where #208 extends the same
+   `wirePostDeployModule`) was resolved semantically — the authority arm still runs BEFORE the
+   `deployedAtBlock` guard, main's EducationHub hat-permission backfill is untouched. main's
+   User-creation rework matters here: `applyHatTransferAdd` now writes a `HatTransfer` PLACEHOLDER
+   User that a module's join event upgrades later in the same block, and post-cutover the
+   AUTHORITY's mint is that first writer — covered by a new ceremony test.
