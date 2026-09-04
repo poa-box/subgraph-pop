@@ -43,6 +43,7 @@ import {
   TaskMetadata,
   TaskApplicationMetadata,
   ProjectMetadata,
+  TaskSubmission,
   TaskRejection,
   TaskClaimExpiry,
   TaskRelease
@@ -340,12 +341,23 @@ export function handleTaskSubmitted(event: TaskSubmitted): void {
 
   let task = Task.load(id);
   if (task) {
+    let submissionId = event.transaction.hash.concatI32(event.logIndex.toI32());
+    let submissionCid = bytes32ToCid(event.params.submissionHash);
+    let submission = new TaskSubmission(submissionId);
+    submission.task = id;
+    submission.submissionHash = event.params.submissionHash;
+    submission.metadata = id + "-" + submissionCid;
+    submission.submittedAt = event.block.timestamp;
+    submission.submittedAtBlock = event.block.number;
+    submission.transactionHash = event.transaction.hash;
+    submission.save();
+
     task.status = "Submitted";
     task.submittedAt = event.block.timestamp;
     task.submissionHash = event.params.submissionHash;
+    task.latestSubmission = submissionId;
 
     // Update metadata link to submission content using taskId-CID format
-    let submissionCid = bytes32ToCid(event.params.submissionHash);
     task.metadata = id + "-" + submissionCid;
 
     task.save();
@@ -752,9 +764,16 @@ export function handleTaskRejected(event: TaskRejected): void {
   let task = Task.load(taskEntityId);
   if (!task) return;
 
+  // Capture the immutable submission pointer before clearing mutable current
+  // submission state. The contract only permits rejection from Submitted, but
+  // keep the relationship nullable for legacy/malformed histories.
+  let rejectedSubmission = task.latestSubmission;
+  let rejectionId = event.transaction.hash.concatI32(event.logIndex.toI32());
+
   task.status = "Assigned";
   task.rejectionHash = event.params.rejectionHash;
   task.rejectionCount = task.rejectionCount + 1;
+  task.latestRejection = rejectionId;
   task.updatedAt = event.block.timestamp;
 
   // Clear stale submission data — task is no longer submitted after rejection
@@ -777,9 +796,11 @@ export function handleTaskRejected(event: TaskRejected): void {
   createTaskMetadataSource(event.params.rejectionHash, taskEntityId);
 
   // Create rejection record
-  let rejectionId = event.transaction.hash.concatI32(event.logIndex.toI32());
   let rejection = new TaskRejection(rejectionId);
   rejection.task = taskEntityId;
+  if (rejectedSubmission !== null) {
+    rejection.submission = rejectedSubmission as Bytes;
+  }
   rejection.rejector = event.params.rejector;
   rejection.rejectorUsername = getUsernameForAddress(event.params.rejector);
   rejection.rejectionHash = event.params.rejectionHash;
