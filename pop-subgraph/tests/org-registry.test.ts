@@ -782,6 +782,32 @@ describe("OrgRegistry", () => {
       );
     });
 
+    test("does not create legacy Roles for native-v2 role and group subject ids", () => {
+      let orgId = Bytes.fromHexString(
+        "0x2222222222222222222222222222222222222222222222222222222222222222"
+      );
+      createMockOrganization(orgId);
+      let org = Organization.load(orgId);
+      if (org != null) {
+        org.membershipAuthority = Address.fromString(
+          "0x00000000000000000000000000000000000000aa"
+        );
+        org.save();
+      }
+
+      // Kyoto retains the legacy event name, but this array contains ROLE + GROUP subjects.
+      handleHatsTreeRegistered(
+        createHatsTreeRegisteredEvent(
+          orgId,
+          BigInt.fromI32(10),
+          [BigInt.fromI32(11), BigInt.fromI32(20)]
+        )
+      );
+
+      assert.entityCount("Role", 0);
+      assert.entityCount("HatLookup", 0);
+    });
+
     test("handles org not found gracefully", () => {
       let orgId = Bytes.fromHexString(
         "0x1111111111111111111111111111111111111111111111111111111111111111"

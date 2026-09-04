@@ -12,6 +12,7 @@ import {
   handleCallExecuted,
   handleSwept,
   handleHatsSet,
+  handleHatsRepointed,
   handleHatMinterAuthorized,
   handleHatsMinted,
   handlePaused,
@@ -26,6 +27,7 @@ import {
   createCallExecutedEvent,
   createSweptEvent,
   createHatsSetEvent,
+  createHatsRepointedEvent,
   createHatMinterAuthorizedEvent,
   createHatsMintedEvent,
   createPausedEvent,
@@ -490,6 +492,20 @@ describe("Executor", () => {
       "0xa16081f360e3847006db660bae1c6d1b2e17ec2a",
       "hatsContract",
       "0x0000000000000000000000000000000000000099"
+    );
+  });
+
+  test("HatsRepointed tracks the Access-v2 MembershipAuthority surface", () => {
+    setupExecutorEntities();
+
+    let authority = Address.fromString("0x00000000000000000000000000000000000000aa");
+    handleHatsRepointed(createHatsRepointedEvent(authority));
+
+    assert.fieldEquals(
+      "ExecutorContract",
+      "0xa16081f360e3847006db660bae1c6d1b2e17ec2a",
+      "hatsContract",
+      authority.toHexString()
     );
   });
 

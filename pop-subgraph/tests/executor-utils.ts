@@ -7,6 +7,7 @@ import {
   CallExecuted,
   Swept,
   HatsSet,
+  HatsRepointed,
   HatMinterAuthorized,
   HatsMinted,
   Paused,
@@ -102,6 +103,15 @@ export function createHatsSetEvent(hats: Address): HatsSet {
     new ethereum.EventParam("hats", ethereum.Value.fromAddress(hats))
   );
 
+  return event;
+}
+
+export function createHatsRepointedEvent(hats: Address): HatsRepointed {
+  let event = changetype<HatsRepointed>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("hats", ethereum.Value.fromAddress(hats))
+  );
   return event;
 }
 

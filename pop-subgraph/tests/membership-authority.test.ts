@@ -330,6 +330,23 @@ describe("MembershipAuthority — subjects", () => {
     assert.fieldEquals("Role", ORG_ID + "-" + id, "image", "ipfs://img");
   });
 
+  test("SubjectRenamed clears stale continuity Role metadata when the CID is zero", () => {
+    createRoleSubject(memberHatId(), "Member");
+    let oldCID = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    handleSubjectRenamed(
+      createSubjectRenamedEvent(authority(), memberHatId(), "Contributor", oldCID, "ipfs://old")
+    );
+    handleSubjectRenamed(
+      createSubjectRenamedEvent(authority(), memberHatId(), "Contributor", zeroHash(), "")
+    );
+
+    let id = memberHatId().toString();
+    assert.fieldEquals("Subject", id, "metadataCID", ZERO_HASH);
+    assert.fieldEquals("Role", ORG_ID + "-" + id, "metadataCID", ZERO_HASH);
+  });
+
   test("MaxMembersSet mirrors the role cap", () => {
     createRoleSubject(memberHatId(), "Member");
     handleMaxMembersSet(createMaxMembersSetEvent(authority(), memberHatId(), 16));

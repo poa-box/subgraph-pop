@@ -19,6 +19,7 @@ import {
   OrgDeployConfig
 } from "../generated/schema";
 import { OrgDeployer as OrgDeployerTemplate } from "../generated/templates";
+import { OrgDeployerV2 as OrgDeployerV2Template } from "../generated/templates";
 import { OrgRegistry as OrgRegistryTemplate } from "../generated/templates";
 import { PaymasterHub as PaymasterHubTemplate } from "../generated/templates";
 import { UniversalAccountRegistry as UniversalAccountRegistryTemplate } from "../generated/templates";
@@ -154,6 +155,9 @@ export function handleInfrastructureDeployed(event: InfrastructureDeployedEvent)
   // Create data source templates for infrastructure contracts
   // This enables dynamic discovery of infrastructure proxy addresses
   OrgDeployerTemplate.create(event.params.orgDeployer);
+  // The Kyoto Access-v2 deployer emits an incompatible OrgDeployed topic at the same proxy.
+  // Instantiate both generation-specific listeners; their event signatures do not overlap.
+  OrgDeployerV2Template.create(event.params.orgDeployer);
   OrgRegistryTemplate.create(event.params.orgRegistry);
   PaymasterHubTemplate.create(event.params.paymasterHub);
   UniversalAccountRegistryTemplate.create(event.params.globalAccountRegistry);

@@ -12,6 +12,7 @@ import {
   PaymentManagerContract,
   ExecutorContract,
   ToggleModuleContract,
+  MembershipAuthorityContract,
   Role,
   Hat,
   WearerEligibility
@@ -24,6 +25,7 @@ import {
   recordUserHatChange,
   isSystemContract
 } from "./utils";
+import { ensureV2DeploymentSubject } from "./org-deployer-v2";
 import {
   TaskManager as TaskManagerTemplate,
   HybridVoting as HybridVotingTemplate,
@@ -225,8 +227,20 @@ export function handleRolesCreated(event: RolesCreated): void {
   // Load the organization to get the eligibilityModule address for Hat lookups
   let org = Organization.load(orgId);
   let eligibilityModuleAddress: Bytes | null = null;
+  let membershipAuthority: MembershipAuthorityContract | null = null;
+  let isAccessV2 = org != null && org.membershipAuthority !== null;
   if (org && org.eligibilityModule) {
     eligibilityModuleAddress = org.eligibilityModule;
+  }
+  if (org != null && org.membershipAuthority !== null) {
+    membershipAuthority = MembershipAuthorityContract.load(
+      changetype<Bytes>(org.membershipAuthority)
+    );
+    if (membershipAuthority == null) {
+      log.warning("RolesCreated missing MembershipAuthority for Access-v2 org {}", [
+        orgId.toHexString()
+      ]);
+    }
   }
 
   for (let i = 0; i < hatIds.length; i++) {
@@ -261,8 +275,34 @@ export function handleRolesCreated(event: RolesCreated): void {
 
     role.save();
 
-    // Also update the corresponding Hat entity if it exists
-    if (eligibilityModuleAddress) {
+    // Kyoto reuses the legacy RolesCreated event signature but the ids are MembershipAuthority
+    // SUBJECT ids. Mirror its deploy-only metadata (especially imageURI, which SubjectCreated does
+    // not emit) onto the canonical Subject as well as the continuity Role.
+    if (membershipAuthority != null) {
+      let subject = ensureV2DeploymentSubject(
+        changetype<MembershipAuthorityContract>(membershipAuthority),
+        hatId,
+        false,
+        true,
+        event
+      );
+      if (i < names.length) {
+        subject.name = names[i];
+      }
+      if (i < images.length) {
+        subject.imageURI = images[i];
+      }
+      if (i < metadataCIDs.length) {
+        subject.metadataCID = metadataCIDs[i];
+      }
+      subject.lastUpdatedAt = event.block.timestamp;
+      subject.transactionHash = event.transaction.hash;
+      subject.save();
+    }
+
+    // Legacy deployments also mirror the summary into the corresponding Hat. Never enter this
+    // path for v2: the same ABI slot contains subject ids and the indexed address is an authority.
+    if (!isAccessV2 && eligibilityModuleAddress) {
       let hatEntityId = eligibilityModuleAddress.toHexString() + "-" + hatId.toString();
       let hat = Hat.load(hatEntityId);
       if (hat != null) {
@@ -290,9 +330,12 @@ export function handleRolesCreated(event: RolesCreated): void {
  */
 export function handleInitialWearersAssigned(event: InitialWearersAssigned): void {
   let orgId = event.params.orgId;
-  let eligibilityModuleAddr = event.params.eligibilityModule;
+  // This ABI slot is `eligibilityModule` on legacy deployers and `membershipAuthority` on Kyoto.
+  let accessContractAddr = event.params.eligibilityModule;
   let wearers = event.params.wearers;
   let hatIds = event.params.hatIds;
+  let org = Organization.load(orgId);
+  let isAccessV2 = org != null && org.membershipAuthority !== null;
 
   // wearers[] and hatIds[] are parallel, but nothing in the event guarantees equal lengths.
   // AssemblyScript bounds-checks array access, so a shorter hatIds[] would abort the mapping and
@@ -329,14 +372,17 @@ export function handleInitialWearersAssigned(event: InitialWearersAssigned): voi
     );
 
     if (user) {
-      // Update WearerEligibility with User link (if it exists from earlier WearerEligibilityUpdated event)
-      let wearerEligibilityId = eligibilityModuleAddr.toHexString() + "-" +
-        hatId.toString() + "-" + wearerAddress.toHexString();
-      let wearerEligibility = WearerEligibility.load(wearerEligibilityId);
+      // WearerEligibility is a legacy EligibilityModule row. Kyoto's second indexed address is a
+      // MembershipAuthority and its SubjectMembership state is owned by TransferSingle instead.
+      if (!isAccessV2) {
+        let wearerEligibilityId = accessContractAddr.toHexString() + "-" +
+          hatId.toString() + "-" + wearerAddress.toHexString();
+        let wearerEligibility = WearerEligibility.load(wearerEligibilityId);
 
-      if (wearerEligibility && !wearerEligibility.wearerUser) {
-        wearerEligibility.wearerUser = user.id;
-        wearerEligibility.save();
+        if (wearerEligibility && !wearerEligibility.wearerUser) {
+          wearerEligibility.wearerUser = user.id;
+          wearerEligibility.save();
+        }
       }
 
       // Create RoleWearer if appropriate

@@ -279,6 +279,33 @@ templates:
             address,address[],uint256[])
           handler: handleInitialWearersAssigned
       file: ./src/org-deployer.ts
+  # Kyoto Access-v2 changes the OrgDeployed topic and adds GroupsCreated. Keep this separate from
+  # the legacy template so both generations remain indexable at the same proxy address. Shared-topic
+  # RolesCreated / InitialWearersAssigned continue through OrgDeployer and dispatch on org access mode.
+  - kind: ethereum
+    name: OrgDeployerV2
+    network: arbitrum-one
+    source:
+      abi: OrgDeployerV2
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Organization
+        - MembershipAuthorityContract
+        - Subject
+        - GroupComposition
+      abis:
+        - name: OrgDeployerV2
+          file: ./abis/OrgDeployerV2.json
+      eventHandlers:
+        - event: OrgDeployed(indexed bytes32,indexed
+            address,address,address,address,address,address,address,address,address,uint256,uint256[])
+          handler: handleOrgDeployedV2
+        - event: GroupsCreated(indexed bytes32,uint256[],string[],uint256[][])
+          handler: handleGroupsCreatedV2
+      file: ./src/org-deployer-v2.ts
   - kind: ethereum
     name: OrgRegistry
     network: arbitrum-one
@@ -887,15 +914,15 @@ templates:
         - event: UniversalFactoryUpdated(indexed address)
           handler: handleUniversalFactoryUpdated
       file: ./src/zk-email-invites.ts
-  # ACCESS V2 — the per-org MembershipAuthority. Created from OrgRegistry.ContractRegistered with
-  # typeId keccak256("MembershipAuthority") (org-registry.ts), exactly like ZkEmailInvites: the
-  # module is not carried by OrgDeployed, so ContractRegistered is the ONLY wiring point.
+  # ACCESS V2 — the per-org MembershipAuthority. Normally created from
+  # OrgRegistry.ContractRegistered with typeId keccak256("MembershipAuthority") (org-registry.ts).
+  # Kyoto's native-v2 OrgDeployed also carries it and provides a fallback creation path when the
+  # registration event is absent; that handler avoids creating a duplicate template when present.
   #
-  # The proxy is PREDEPLOYED + atomically initialized one or more blocks earlier, so
-  # MembershipAuthorityInitialized/PausedSet from that tx are cross-block-EARLIER than this
-  # template and never index — org-registry.ts DERIVES that config (executor from the Organization,
-  # paused = true from the born-paused invariant). Every SUBJECT/seed event is emitted in the
-  # governance batch that registers the proxy or later, i.e. same-tx-or-after, so it indexes.
+  # For migrations the proxy is predeployed and initialized one or more blocks earlier, so init
+  # events are unreachable and org-registry.ts derives their config. For native-v2 deployment the
+  # initialize/seed logs and ContractRegistered share one transaction; graph-node replays those
+  # same-block logs into the newly created template.
   # The handlers below make ZERO eth_calls.
   - kind: ethereum
     name: MembershipAuthority
@@ -1078,6 +1105,8 @@ templates:
           handler: handleSwept
         - event: HatsSet(indexed address)
           handler: handleHatsSet
+        - event: HatsRepointed(indexed address)
+          handler: handleHatsRepointed
         - event: HatMinterAuthorized(indexed address,bool)
           handler: handleHatMinterAuthorized
         - event: HatsMinted(indexed address,uint256[])
