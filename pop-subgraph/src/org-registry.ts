@@ -47,8 +47,8 @@ const ZKEMAIL_INVITES_ID: Bytes = Bytes.fromHexString(
 );
 
 // keccak256("MembershipAuthority") — the OrgRegistry typeId for the per-org Access-v2 authority.
-// Mirrors ModuleTypes.MEMBERSHIP_AUTHORITY_ID in the contracts repo. Like ZkEmailInvites the
-// module is never carried by OrgDeployed, so ContractRegistered is the only wiring point.
+// Mirrors ModuleTypes.MEMBERSHIP_AUTHORITY_ID in the contracts repo. Migrated orgs discover it only
+// through ContractRegistered; native Kyoto deployments also repeat it in their v2 OrgDeployed event.
 const MEMBERSHIP_AUTHORITY_ID: Bytes = Bytes.fromHexString(
   "0xdff254c0d9c318c4e70eac95af4c0c9189e13f9d51ae2cfe2c1c446c4775ddb8"
 );
@@ -500,13 +500,18 @@ export function handleHatsTreeRegistered(event: HatsTreeRegisteredEvent): void {
     org.lastUpdatedAt = event.block.timestamp;
     org.save();
 
-    // Create Role entities for topHatId and all roleHatIds
-    getOrCreateRole(orgId, topHatId, event);
+    // This legacy-named registry event is also emitted for native v2, where `topHatId` is the ADMIN
+    // subject and roleHatIds contains ROLE + GROUP subjects. MembershipAuthority handlers own their
+    // continuity Roles and deliberately never create one for a GROUP, so do not preemptively treat
+    // every v2 subject as a Hat here. OrgDeployedV2 later narrows Organization.roleHatIds to ROLE
+    // subjects only for compatibility helpers.
+    if (org.membershipAuthority === null) {
+      getOrCreateRole(orgId, topHatId, event);
 
-    for (let i = 0; i < roleHatIds.length; i++) {
-      getOrCreateRole(orgId, roleHatIds[i], event);
+      for (let i = 0; i < roleHatIds.length; i++) {
+        getOrCreateRole(orgId, roleHatIds[i], event);
+      }
     }
   }
 }
-
 

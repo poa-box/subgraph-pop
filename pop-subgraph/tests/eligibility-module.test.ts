@@ -296,6 +296,50 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
     assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(metadataCID));
   });
 
+  test("HatMetadataUpdated repairs Role name when same-transaction viewHat returned the CID", () => {
+    setupEligibilityModuleEntities();
+
+    let hatsAddress = Address.fromString("0x000000000000000000000000000000000000abcd");
+    let moduleAddress = Address.fromString("0xa16081f360e3847006db660bae1c6d1b2e17ec2a");
+    let eligibilityModule = EligibilityModuleContract.load(moduleAddress);
+    if (eligibilityModule != null) {
+      eligibilityModule.hatsContract = hatsAddress;
+      eligibilityModule.save();
+    }
+
+    let hatId = BigInt.fromI32(3003);
+    let metadataCID = Bytes.fromHexString(
+      "0xc9f573a180f5c200d297e8c451effc4ffb8ae867ec72add82f282daf310443fc"
+    );
+
+    // updateHatMetadata runs later in the same transaction as createHatWithEligibility. An eth_call
+    // made by the creation handler observes this final details value, not the original role name.
+    mockViewHat(hatsAddress, hatId, metadataCID.toHexString(), "ipfs://new-member.png");
+    let created = createHatCreatedWithEligibilityEvent(
+      Address.fromString("0x0000000000000000000000000000000000000099"),
+      BigInt.fromI32(1001),
+      hatId,
+      true,
+      true,
+      BigInt.fromI32(0)
+    );
+    handleHatCreatedWithEligibility(created);
+
+    let orgId = Bytes.fromHexString(
+      "0x1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    let roleId = orgId.toHexString() + "-" + hatId.toString();
+    assert.fieldEquals("Role", roleId, "name", metadataCID.toHexString());
+
+    let updated = createHatMetadataUpdatedEvent(hatId, "New Member", metadataCID);
+    updated.logIndex = BigInt.fromI32(2);
+    handleHatMetadataUpdated(updated);
+
+    assert.fieldEquals("Role", roleId, "name", "New Member");
+    assert.fieldEquals("Role", roleId, "metadataCID", metadataCID.toHexString());
+    assert.fieldEquals("Hat", moduleAddress.toHexString() + "-" + hatId.toString(), "name", "New Member");
+  });
+
   test("HatMetadataUpdated sets metadata link to CIDv0 format", () => {
     setupEligibilityModuleEntities();
 
@@ -387,6 +431,34 @@ describe("EligibilityModule - HatMetadataUpdated", () => {
     assert.fieldEquals("Hat", hatEntityId, "name", "SUPER_ADMIN");
     // Verify metadata link is updated to new CID
     assert.fieldEquals("Hat", hatEntityId, "metadata", hatEntityId + "-" + bytes32ToCid(secondCID));
+  });
+
+  test("HatMetadataUpdated with zero CID clears a previously linked IPFS document", () => {
+    setupEligibilityModuleEntities();
+
+    let hatId = BigInt.fromI32(1001);
+    createHatEntity(hatId);
+    let firstCID = Bytes.fromHexString(
+      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    );
+    handleHatMetadataUpdated(createHatMetadataUpdatedEvent(hatId, "Member", firstCID));
+
+    let cleared = createHatMetadataUpdatedEvent(
+      hatId,
+      "Member",
+      Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000")
+    );
+    cleared.logIndex = BigInt.fromI32(2);
+    handleHatMetadataUpdated(cleared);
+
+    let hatEntityId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1001";
+    assert.assertNull(Hat.load(hatEntityId)!.metadata);
+    assert.fieldEquals(
+      "Role",
+      "0x1111111111111111111111111111111111111111111111111111111111111111-1001",
+      "metadataCID",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+    );
   });
 
   test("HatMetadataUpdated for non-existent hat does not create event", () => {

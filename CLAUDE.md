@@ -90,8 +90,24 @@ Mismatched IDs cause silent data loss (entity.load() returns null). Follow these
 `networks.json` must carry all 7 under EVERY network (`arbitrum-one`, `gnosis`). `graph build --network X` / `graph deploy --network X` hard-throws ``'<name>' was not found in the '<network>' configuration, please update!`` if a manifest dataSource has no entry. For a contract not deployed on a network, use the zero address with the PoaManager startBlock — that is what `PoaManagerHub` does on gnosis and `PoaManagerSatellite` on arbitrum-one.
 
 Everything else is dynamically discovered via templates:
-1. `PoaManager.InfrastructureDeployed` creates: OrgDeployer, OrgRegistry, PaymasterHub, UniversalAccountRegistry, PasskeyAccountFactory
-2. `OrgDeployer.OrgDeployed` creates per-org: TaskManager, HybridVoting, DirectDemocracyVoting, EligibilityModule, ParticipationToken, QuickJoin, EducationHub, PaymentManager, Executor, ToggleModule
+1. `PoaManager.InfrastructureDeployed` creates: both generation-specific listeners at the same
+   deployer proxy (`OrgDeployer` for the legacy event topic and `OrgDeployerV2` for Kyoto), plus
+   OrgRegistry, PaymasterHub, UniversalAccountRegistry, and PasskeyAccountFactory.
+2. Legacy `OrgDeployer.OrgDeployed` creates per-org: TaskManager, HybridVoting,
+   DirectDemocracyVoting, EligibilityModule, ParticipationToken, QuickJoin, EducationHub,
+   PaymentManager, Executor, and ToggleModule.
+3. Kyoto `OrgDeployerV2.OrgDeployed` creates the same functional-module entities/templates but
+   wires MembershipAuthority instead of EligibilityModule/ToggleModule. Native-v2 subject ids are
+   mirrored into legacy `Role`/`RoleWearer` ids only for continuity; GROUP subjects never become
+   Hats or Roles. Its `GroupsCreated` handler indexes group composition. `RolesCreated` and
+   `InitialWearersAssigned` retain their legacy ABI topics, so the legacy template receives them and
+   dispatches by `Organization.membershipAuthority`.
+
+The native-v2 authority is active from genesis: it self-routes through embedded subject ids and has
+no migration `AuthorityBound` event. `OrgDeployerV2` therefore records `isRouterBound = true` and
+`cutoverAt = deployedAt`, while leaving `routerBinding` null. MembershipAuthority's
+`ContractRegistered` remains the primary template-creation point; the v2 deploy handler creates it
+only as a fallback to avoid duplicate dynamic sources.
 
 **Timing gotcha**: PaymasterHub and UniversalAccountRegistry are initialized in an EARLIER BLOCK than `InfrastructureDeployed`, so their `Initialized` logs never reach the templates. `handleInfrastructureDeployed` (`poa-manager.ts`) compensates by reading initial state from the contracts via `try_` calls. This applies to cross-block misses only — a template DOES receive logs from earlier in the SAME block, including earlier logs in the creating transaction, so do not add a `try_` backfill for a same-block "missed" event.
 

@@ -8,6 +8,7 @@ import {
   CallExecuted as CallExecutedEvent,
   Swept as SweptEvent,
   HatsSet as HatsSetEvent,
+  HatsRepointed as HatsRepointedEvent,
   HatMinterAuthorized as HatMinterAuthorizedEvent,
   HatsMinted as HatsMintedEvent,
   Paused as PausedEvent,
@@ -220,6 +221,15 @@ export function handleHatsSet(event: HatsSetEvent): void {
   // Update the ExecutorContract entity
   let executor = ExecutorContract.load(contractAddress);
   if (executor) {
+    executor.hatsContract = event.params.hats;
+    executor.save();
+  }
+}
+
+/** Access-v2 repoints Executor's IHats-shaped surface to MembershipAuthority. */
+export function handleHatsRepointed(event: HatsRepointedEvent): void {
+  let executor = ExecutorContract.load(event.address);
+  if (executor != null) {
     executor.hatsContract = event.params.hats;
     executor.save();
   }

@@ -535,7 +535,13 @@ export function handleSubjectCreated(event: SubjectCreatedEvent): void {
   }
   subject.kind = isGroup ? "Group" : "Role";
   subject.name = event.params.name;
-  subject.metadataCID = event.params.metadataCID;
+  // Kyoto's genesis SubjectCreated events intentionally carry bytes32(0) and no image URI; the
+  // deployer's later RolesCreated summary carries the configured metadata/image. Dynamic-source
+  // replay can run SubjectCreated after that summary, so never erase richer deployment metadata
+  // with the seed event's zero placeholder.
+  if (!event.params.metadataCID.equals(ZERO_BYTES32) || subject.metadataCID === null) {
+    subject.metadataCID = event.params.metadataCID;
+  }
   subject.maxMembers = event.params.maxMembers.toI32();
   subject.isLegacyAdopted = subjectId.ge(hatsNamespaceFloor());
   subject.lastUpdatedAt = event.block.timestamp;
@@ -553,6 +559,16 @@ export function handleSubjectCreated(event: SubjectCreatedEvent): void {
     role.name = event.params.name;
     if (!event.params.metadataCID.equals(ZERO_BYTES32)) {
       role.metadataCID = event.params.metadataCID;
+    }
+    if (subject.imageURI === null && role.image !== null) {
+      subject.imageURI = role.image;
+    }
+    if (
+      event.params.metadataCID.equals(ZERO_BYTES32) &&
+      subject.metadataCID !== null &&
+      role.metadataCID === null
+    ) {
+      role.metadataCID = subject.metadataCID;
     }
     role.save();
     subject.role = role.id;
@@ -590,9 +606,9 @@ export function handleSubjectRenamed(event: SubjectRenamedEvent): void {
     if (role != null) {
       role.name = event.params.name;
       role.image = event.params.imageURI;
-      if (!event.params.metadataCID.equals(ZERO_BYTES32)) {
-        role.metadataCID = event.params.metadataCID;
-      }
+      // bytes32(0) is an explicit metadata clear, not "no update". Mirror it verbatim so the
+      // continuity Role cannot retain a stale CID after the canonical Subject has cleared it.
+      role.metadataCID = event.params.metadataCID;
       role.save();
     }
   }

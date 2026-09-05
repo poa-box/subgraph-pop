@@ -2883,13 +2883,11 @@ type MembershipAuthorityContract @entity(immutable: false) {
   id: Bytes! # authority proxy address
   organization: Organization!
   # ---- Deploy-time config ----
-  # The authority proxy is PREDEPLOYED and atomically initialized in its OWN transaction, one or
-  # more blocks BEFORE the governance batch that registers it in OrgRegistry. The data-source
-  # template is created at ContractRegistered, so `MembershipAuthorityInitialized` / `PausedSet`
-  # from that predeploy tx are cross-block-EARLIER and never index. They are therefore DERIVED at
-  # registration from the Organization entity (executor) plus the contract's born-paused
-  # invariant — never via an eth_call. `initConfigDerived` records that provenance; a later
-  # in-window `PausedSet` overwrites `paused` with observed truth.
+  # Migrated authorities are predeployed and initialized before their later registration, so those
+  # init logs predate the template and registration derives the config without an eth_call.
+  # Native-v2 authorities initialize and register in one deployment transaction; graph-node replays
+  # their same-block init logs and replaces the derived defaults with observed truth.
+  # `initConfigDerived` records which provenance currently backs these fields.
   executor: Bytes
   paymasterHub: Bytes
   orgIdHash: Bytes
@@ -2902,7 +2900,9 @@ type MembershipAuthorityContract @entity(immutable: false) {
   groupSubjectCount: Int!
   # Accepted memberships across all ROLE subjects (mirrors the sum of Subject.memberCount).
   acceptedMembershipCount: Int!
-  # Router bind — set by AuthorityRouter.AuthorityBound during the cutover batch.
+  # Router bind — set by AuthorityRouter.AuthorityBound during a legacy cutover. Native-v2 orgs
+  # self-route from genesis, so OrgDeployedV2 sets isRouterBound=true and cutoverAt=deploy time while
+  # leaving routerBinding null (there is no synthetic router event to point at).
   routerBinding: RouterBinding
   isRouterBound: Boolean!
   registeredAt: BigInt!

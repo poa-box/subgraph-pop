@@ -45,6 +45,7 @@ import {
   getUsernameForAddress,
   createUserOnJoin,
   loadExistingUser,
+  getOrCreateRole,
   linkHatToRole,
   getOrCreateRoleWearer,
   linkWearerEligibilityToRoleWearer,
@@ -1153,9 +1154,28 @@ export function handleHatMetadataUpdated(
   let metadataCID = event.params.metadataCID;
   if (!metadataCID.equals(Bytes.fromHexString("0x0000000000000000000000000000000000000000000000000000000000000000"))) {
     hat.metadata = hatMetadataId(hatEntityId, bytes32ToCid(metadataCID));
+  } else {
+    // bytes32(0) explicitly clears metadata on-chain. Leaving the old entity reference here would
+    // keep serving stale IPFS content even though no new file source is (correctly) created.
+    hat.metadata = null;
   }
 
   hat.save();
+
+  // Keep the organization-centric continuity Role in lockstep with the Hat. A role created in the
+  // same governance transaction can observe the transaction's FINAL Hats.details value through
+  // viewHat(). updateHatMetadata intentionally rewrites that value to the bytes32 CID rendered as a
+  // hex string, while this event carries the actual human-readable name. Without mirroring the
+  // event here, Role.name permanently keeps the CID and wins the frontend's name fallback even
+  // though Hat.name is correct.
+  let eligibilityModule = EligibilityModuleContract.load(contractAddress);
+  if (eligibilityModule != null) {
+    let role = getOrCreateRole(eligibilityModule.organization, hatId, event);
+    role.hat = hatEntityId;
+    role.name = event.params.name;
+    role.metadataCID = event.params.metadataCID;
+    role.save();
+  }
 
   // Create event entity for history tracking
   let eventId = event.transaction.hash.concatI32(event.logIndex.toI32());

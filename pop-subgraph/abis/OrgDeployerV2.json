@@ -1,0 +1,32 @@
+[
+  {
+    "type": "event",
+    "name": "OrgDeployed",
+    "inputs": [
+      { "name": "orgId", "type": "bytes32", "indexed": true, "internalType": "bytes32" },
+      { "name": "executor", "type": "address", "indexed": true, "internalType": "address" },
+      { "name": "hybridVoting", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "directDemocracyVoting", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "quickJoin", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "participationToken", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "taskManager", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "educationHub", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "paymentManager", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "membershipAuthority", "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "adminSubjectId", "type": "uint256", "indexed": false, "internalType": "uint256" },
+      { "name": "roleSubjectIds", "type": "uint256[]", "indexed": false, "internalType": "uint256[]" }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "GroupsCreated",
+    "inputs": [
+      { "name": "orgId", "type": "bytes32", "indexed": true, "internalType": "bytes32" },
+      { "name": "subjectIds", "type": "uint256[]", "indexed": false, "internalType": "uint256[]" },
+      { "name": "names", "type": "string[]", "indexed": false, "internalType": "string[]" },
+      { "name": "memberSubjectIds", "type": "uint256[][]", "indexed": false, "internalType": "uint256[][]" }
+    ],
+    "anonymous": false
+  }
+]

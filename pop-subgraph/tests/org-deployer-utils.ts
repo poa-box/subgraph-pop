@@ -1,6 +1,10 @@
 import { newMockEvent } from "matchstick-as";
 import { ethereum, Address, Bytes, BigInt } from "@graphprotocol/graph-ts";
-import { OrgDeployed, RolesCreated } from "../generated/templates/OrgDeployer/OrgDeployer";
+import {
+  OrgDeployed,
+  RolesCreated,
+  InitialWearersAssigned
+} from "../generated/templates/OrgDeployer/OrgDeployer";
 
 export function createOrgDeployedEvent(
   orgId: Bytes,
@@ -132,4 +136,28 @@ export function createRolesCreatedEvent(
   );
 
   return rolesCreatedEvent;
+}
+
+export function createInitialWearersAssignedEvent(
+  orgId: Bytes,
+  accessContract: Address,
+  wearers: Address[],
+  ids: BigInt[]
+): InitialWearersAssigned {
+  let event = changetype<InitialWearersAssigned>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(
+    new ethereum.EventParam("orgId", ethereum.Value.fromFixedBytes(orgId))
+  );
+  // The topic is shared: legacy names this EligibilityModule, Kyoto names it MembershipAuthority.
+  event.parameters.push(
+    new ethereum.EventParam("eligibilityModule", ethereum.Value.fromAddress(accessContract))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("wearers", ethereum.Value.fromAddressArray(wearers))
+  );
+  event.parameters.push(
+    new ethereum.EventParam("hatIds", ethereum.Value.fromUnsignedBigIntArray(ids))
+  );
+  return event;
 }

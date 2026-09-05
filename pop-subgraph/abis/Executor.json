@@ -484,6 +484,19 @@
   },
   {
     "type": "event",
+    "name": "HatsRepointed",
+    "inputs": [
+      {
+        "name": "hats",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "HatsSet",
     "inputs": [
       {
