@@ -582,7 +582,7 @@ describe("TaskManager", () => {
     assert.fieldEquals("Task", expectedId, "status", "Completed");
   });
 
-  test("Task rejected updates status and creates rejection record", () => {
+  test("Task submissions remain indexed and each rejection links the reviewed version", () => {
     setupTaskManagerEntities();
 
     // Create project and task
@@ -628,6 +628,9 @@ describe("TaskManager", () => {
     handleTaskSubmitted(submitEvent);
 
     let expectedId = "0xa16081f360e3847006db660bae1c6d1b2e17ec2a-1";
+    let submissionId = submitEvent.transaction.hash
+      .concatI32(submitEvent.logIndex.toI32())
+      .toHexString();
 
     // Verify submission data is set before rejection
     assert.fieldEquals("Task", expectedId, "status", "Submitted");
@@ -636,6 +639,33 @@ describe("TaskManager", () => {
       expectedId,
       "submissionHash",
       "0x2222222222222222222222222222222222222222222222222222222222222222"
+    );
+    assert.fieldEquals("Task", expectedId, "latestSubmission", submissionId);
+    assert.entityCount("TaskSubmission", 1);
+    assert.fieldEquals("TaskSubmission", submissionId, "task", expectedId);
+    assert.fieldEquals(
+      "TaskSubmission",
+      submissionId,
+      "submissionHash",
+      "0x2222222222222222222222222222222222222222222222222222222222222222"
+    );
+    assert.fieldEquals(
+      "TaskSubmission",
+      submissionId,
+      "submittedAt",
+      submitEvent.block.timestamp.toString()
+    );
+    assert.fieldEquals(
+      "TaskSubmission",
+      submissionId,
+      "submittedAtBlock",
+      submitEvent.block.number.toString()
+    );
+    assert.fieldEquals(
+      "TaskSubmission",
+      submissionId,
+      "transactionHash",
+      submitEvent.transaction.hash.toHexString()
     );
 
     // Reject the task
@@ -646,9 +676,14 @@ describe("TaskManager", () => {
     let rejectEvent = createTaskRejectedEvent(taskId, rejector, rejectionHash);
     rejectEvent.logIndex = BigInt.fromI32(3);
     handleTaskRejected(rejectEvent);
+    let rejectionId = rejectEvent.transaction.hash
+      .concatI32(rejectEvent.logIndex.toI32())
+      .toHexString();
 
     assert.fieldEquals("Task", expectedId, "status", "Assigned");
     assert.fieldEquals("Task", expectedId, "rejectionCount", "1");
+    assert.fieldEquals("Task", expectedId, "latestSubmission", submissionId);
+    assert.fieldEquals("Task", expectedId, "latestRejection", rejectionId);
     assert.fieldEquals(
       "Task",
       expectedId,
@@ -659,6 +694,42 @@ describe("TaskManager", () => {
     assert.fieldEquals("Task", expectedId, "submissionHash", "null");
     assert.fieldEquals("Task", expectedId, "submittedAt", "null");
     assert.entityCount("TaskRejection", 1);
+    assert.fieldEquals("TaskRejection", rejectionId, "submission", submissionId);
+
+    // A second review cycle appends a new submission and links the second
+    // rejection to it without altering the first historical relationship.
+    let secondSubmissionHash = Bytes.fromHexString(
+      "0x3333333333333333333333333333333333333333333333333333333333333333"
+    );
+    let secondSubmitEvent = createTaskSubmittedEvent(taskId, secondSubmissionHash);
+    secondSubmitEvent.logIndex = BigInt.fromI32(4);
+    handleTaskSubmitted(secondSubmitEvent);
+    let secondSubmissionId = secondSubmitEvent.transaction.hash
+      .concatI32(secondSubmitEvent.logIndex.toI32())
+      .toHexString();
+
+    assert.entityCount("TaskSubmission", 2);
+    assert.fieldEquals("Task", expectedId, "latestSubmission", secondSubmissionId);
+
+    let secondRejectionHash = Bytes.fromHexString(
+      "0xbcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890a"
+    );
+    let secondRejectEvent = createTaskRejectedEvent(taskId, rejector, secondRejectionHash);
+    secondRejectEvent.logIndex = BigInt.fromI32(5);
+    handleTaskRejected(secondRejectEvent);
+    let secondRejectionId = secondRejectEvent.transaction.hash
+      .concatI32(secondRejectEvent.logIndex.toI32())
+      .toHexString();
+
+    assert.entityCount("TaskRejection", 2);
+    assert.fieldEquals("Task", expectedId, "latestRejection", secondRejectionId);
+    assert.fieldEquals("TaskRejection", rejectionId, "submission", submissionId);
+    assert.fieldEquals(
+      "TaskRejection",
+      secondRejectionId,
+      "submission",
+      secondSubmissionId
+    );
   });
 
   // ========================================

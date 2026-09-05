@@ -464,6 +464,7 @@ templates:
         - Project
         - Task
         - TaskApplication
+        - TaskSubmission
         - TaskRejection
         - TaskClaimExpiry
         - ProjectManager

@@ -367,7 +367,10 @@ type Task @entity(immutable: false) {
   # ---- Claim release (TaskManager v7) ----
   releaseCount: Int! # number of unclaimTask releases back to the pool (TaskUnclaimed events)
   lastReleasedAt: BigInt # timestamp of the most recent release; null if never released
+  latestSubmission: TaskSubmission # most recently submitted work; retained after rejection
+  latestRejection: TaskRejection # most recent review rejection, if any
   applications: [TaskApplication!]! @derivedFrom(field: "task")
+  submissions: [TaskSubmission!]! @derivedFrom(field: "task")
   rejections: [TaskRejection!]! @derivedFrom(field: "task")
   claimExpiries: [TaskClaimExpiry!]! @derivedFrom(field: "task")
   releases: [TaskRelease!]! @derivedFrom(field: "task")
@@ -420,9 +423,25 @@ type TaskApplicationMetadata @entity(immutable: true) {
   indexedAt: BigInt
 }
 
+"""
+Immutable record of a task submission. Task.submissionHash is mutable current
+state and is cleared when work is rejected; this entity preserves each submitted
+version so review history remains queryable.
+"""
+type TaskSubmission @entity(immutable: true) {
+  id: Bytes! # txHash-logIndex
+  task: Task!
+  submissionHash: Bytes!
+  metadata: TaskMetadata # IPFS-indexed submission content
+  submittedAt: BigInt!
+  submittedAtBlock: BigInt!
+  transactionHash: Bytes!
+}
+
 type TaskRejection @entity(immutable: true) {
   id: Bytes! # txHash-logIndex
   task: Task!
+  submission: TaskSubmission # exact submission reviewed by this rejection
   rejector: Bytes!
   rejectorUsername: String
   rejectorUser: User
