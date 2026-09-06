@@ -109,6 +109,25 @@ no migration `AuthorityBound` event. `OrgDeployerV2` therefore records `isRouter
 `ContractRegistered` remains the primary template-creation point; the v2 deploy handler creates it
 only as a fallback to avoid duplicate dynamic sources.
 
+### Wave G retirement and historical continuity
+
+Consumer availability requires `Organization.membershipAuthority` with a nonzero address,
+`isRouterBound = true`, and a positive `cutoverAt`. An authority that is only registered/seeded, or
+has been unbound for rollback, is not ready. A paused authority remains an upgraded org; pausing is
+operational state, not retirement. Native-v2 organizations meet the same predicate at deployment.
+Never use organization names or a fixed allowlist for this distinction.
+
+Retirement is a frontend/CLI visibility policy. Keep all legacy data sources, templates, ABIs,
+original startBlocks, entity IDs, and historical relationships: the migrated organizations' V1
+users, proposals, votes, projects, and tasks must survive reindexing and future membership removal.
+Do not clear `User.organization` when a user leaves. Legacy-only org history remains indexed too.
+
+`utils.isAuthorityOwnedHat` hands adopted ids to the authority at cutover and back on rollback.
+Hats token/status handlers and legacy EligibilityModule claim/metadata handlers must honor it when
+writing shared `User`/`RoleWearer`/`Role` state. Legacy claim and metadata event records are still
+indexed after cutover. `tests/wave-g-history.test.ts` replays V1 activity through migration and
+subsequent removal, and guards both remaining legacy co-writer paths.
+
 **Timing gotcha**: PaymasterHub and UniversalAccountRegistry are initialized in an EARLIER BLOCK than `InfrastructureDeployed`, so their `Initialized` logs never reach the templates. `handleInfrastructureDeployed` (`poa-manager.ts`) compensates by reading initial state from the contracts via `try_` calls. This applies to cross-block misses only — a template DOES receive logs from earlier in the SAME block, including earlier logs in the creating transaction, so do not add a `try_` backfill for a same-block "missed" event.
 
 ## IPFS Metadata Pattern
