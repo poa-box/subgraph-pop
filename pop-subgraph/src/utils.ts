@@ -14,7 +14,35 @@ import {
   HatLookup,
   ExecutorContract,
   EligibilityModuleContract,
+  Subject,
+  MembershipAuthorityContract,
 } from "../generated/schema";
+
+/**
+ * ACCESS-V2 CUTOVER GUARD — has a `MembershipAuthority` taken ownership of this hat id?
+ *
+ * A migrated org ADOPTS its legacy hat ids verbatim as subject ids, and the authority's own
+ * TransferSingle mirror writes the SAME `RoleWearer` / `User` / `HatLookup` rows this file writes
+ * (that reuse IS the entity-id continuity). The legacy tokens are never burned at cutover —
+ * rollback depends on them surviving — and the toggle-off is ToggleModule-local, so this dataSource
+ * stays a live co-writer of an adopted id forever: a post-cutover `Hats.renounceHat`, a stray
+ * `transferHat`, or a permissionless `checkHatStatus` poke would silently contradict the authority
+ * mirror (deactivating a RoleWearer, unlinking a User, or flipping `Hat.active` false under wearers
+ * the authority still holds).
+ *
+ * The guard is per-ID, not per-domain, and reads two entities this mapping already owns (no
+ * eth_calls): the `Subject` row exists only for an id the authority actually adopted, and the
+ * binding — the atomic cutover marker, ordered BEFORE the toggle-off in the batch — flips
+ * `isRouterBound`. Before the bind (the seed window, when legacy Hats is still the truth) and after
+ * an `AuthorityUnbound` rollback this returns false and the legacy path runs exactly as before.
+ */
+export function isAuthorityOwnedHat(hatId: BigInt): boolean {
+  let subject = Subject.load(hatId.toString());
+  if (subject == null) return false;
+  let authority = MembershipAuthorityContract.load(subject.authority);
+  if (authority == null) return false;
+  return authority.isRouterBound;
+}
 
 /**
  * Helper function to get username for an address from UniversalAccountRegistry

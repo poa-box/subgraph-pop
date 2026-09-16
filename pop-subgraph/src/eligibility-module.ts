@@ -52,7 +52,8 @@ import {
   updateRoleWearerStatus,
   recordUserHatChange,
   shouldCreateRoleWearer,
-  linkHatToLookup
+  linkHatToLookup,
+  isAuthorityOwnedHat
 } from "./utils";
 
 /**
@@ -947,6 +948,20 @@ export function handleHatClaimed(event: HatClaimedEvent): void {
       application.save();
     }
 
+    // The legacy module remains indexed for history, but after cutover its claims cannot
+    // resurrect a user/role wearer that the authority removed or never accepted.
+    if (isAuthorityOwnedHat(hatId)) {
+      let existingUser = loadExistingUser(
+        eligibilityModule.organization,
+        event.params.wearer,
+        event.block.timestamp,
+        event.block.number
+      );
+      if (existingUser != null) claim.wearerUser = existingUser.id;
+      claim.save();
+      return;
+    }
+
     let user = createUserOnJoin(
       eligibilityModule.organization,
       event.params.wearer,
@@ -1169,7 +1184,9 @@ export function handleHatMetadataUpdated(
   // event here, Role.name permanently keeps the CID and wins the frontend's name fallback even
   // though Hat.name is correct.
   let eligibilityModule = EligibilityModuleContract.load(contractAddress);
-  if (eligibilityModule != null) {
+  // Preserve the legacy Hat and metadata event, but the authority owns the shared Role after
+  // cutover. A late legacy rename must not undo SubjectRenamed / SubjectCreated.
+  if (eligibilityModule != null && !isAuthorityOwnedHat(hatId)) {
     let role = getOrCreateRole(eligibilityModule.organization, hatId, event);
     role.hat = hatEntityId;
     role.name = event.params.name;

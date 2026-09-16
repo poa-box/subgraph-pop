@@ -2,6 +2,7 @@ import { newMockEvent } from "matchstick-as";
 import { ethereum, Address, BigInt, Bytes } from "@graphprotocol/graph-ts";
 import {
   HatMetadataUpdated,
+  HatClaimed,
   HatCreatedWithEligibility,
   DefaultEligibilityUpdated,
   RoleApplicationSubmitted,
@@ -226,5 +227,13 @@ export function createWearerVouchesClearedEvent(
     new ethereum.EventParam("admin", ethereum.Value.fromAddress(admin))
   );
 
+  return event;
+}
+
+export function createHatClaimedEvent(hatId: BigInt, wearer: Address): HatClaimed {
+  let event = changetype<HatClaimed>(newMockEvent());
+  event.parameters = new Array();
+  event.parameters.push(new ethereum.EventParam("wearer", ethereum.Value.fromAddress(wearer)));
+  event.parameters.push(new ethereum.EventParam("hatId", ethereum.Value.fromUnsignedBigInt(hatId)));
   return event;
 }
